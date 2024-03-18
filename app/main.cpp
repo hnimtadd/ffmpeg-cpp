@@ -1,23 +1,31 @@
-#include <cstdlib>
 #include <iostream>
-#include <stdlib.h>
 
-#include "exampleConfig.h"
+#include <opencv2/core.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgcodecs.hpp>
 
-#include "calculator/main.h"
-/*
- * Simple main program that demontrates how access
- * CMake definitions (here the version number) from source code.
- */
+using namespace cv;
+
 int main(int argc, char *argv[]) {
-  if (argc != 3) {
-    std::cout << "C++ Boiler Plate v" << PROJECT_VERSION_MAJOR << "."
-              << PROJECT_VERSION_MINOR << "." << PROJECT_VERSION_PATCH << "."
-              << PROJECT_VERSION_TWEAK << std::endl;
+  if (argc == 1) {
+    std::cout << "Usage: " << std::endl
+              << "\t- ./main /image/path" << std::endl;
     return 0;
   }
+  std::string image_path = samples::findFile(argv[1]);
+  Mat img = imread(image_path, IMREAD_COLOR);
 
-  Calculator calc = Calculator();
-  std::cout << calc.Sum(atoi(argv[1]), atoi(argv[2])) << std::endl;
-  return 1;
+  if (img.empty()) {
+    std::cout << "Could not read the image: " << image_path << std::endl;
+    return 1;
+  }
+
+  imshow("Display window", img);
+  int k = waitKey(0); // Wait for a keystroke in the window
+
+  if (k == 's') {
+    imwrite(argv[1], img);
+  }
+
+  return 0;
 }
