@@ -30,7 +30,6 @@ void Client::ShowImage(char *path) {
 
   imshow("Display window", img);
   int k = cv::waitKey(0); // Wait for a keystroke in the window
-
   if (k == 's') {
     imwrite(path, img);
   }
