@@ -1,9 +1,13 @@
 #include <cerrno>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <libavutil/pixfmt.h>
 #include <opencv2/core/mat.hpp>
+#include <opencv2/core/types.hpp>
 #include <opencv2/imgcodecs.hpp>
 // FFmpeg
 extern "C" {
@@ -30,6 +34,7 @@ int main(int argc, char *argv[]) {
   const char *infile = argv[1];
   int ret;
   AVFormatContext *inctx = nullptr;
+
   // open input file context
   ret = avformat_open_input(&inctx, infile, nullptr, nullptr);
   if (ret < 0) {
@@ -74,10 +79,8 @@ int main(int argc, char *argv[]) {
   if (pkt == NULL) {
     return 2;
   }
-
   const AVCodec *pCodec;
   pCodec = avcodec_find_decoder(vstrm->codecpar->codec_id);
-
   AVCodecContext *pCodecCtx = avcodec_alloc_context3(pCodec);
   ret = avcodec_parameters_to_context(pCodecCtx, vstrm->codecpar);
   if (ret < 0) {
@@ -158,10 +161,25 @@ int main(int argc, char *argv[]) {
     }
 
     std::cout << "decode" << std::endl;
+    uint8_t *rValue = frame->data[0];
+    uint8_t *gValue = frame->data[1];
+    uint8_t *bValue = frame->data[2];
 
-    cv::Mat image(height, width, CV_8UC1, frame->data[0], frame->linesize[0]);
+    uint8_t *arr = (uint8_t *)malloc(height * width * 3 * sizeof(uint8_t));
 
-    cv::imshow("press ESC to exit", image);
+    memcpy(arr, gValue, width * height);
+    memcpy(arr + width * height, bValue, width * height);
+    memcpy(arr + 2 * width * height, rValue, width * height);
+
+    cv::Mat imageG = cv::Mat(height, width, CV_8UC1, frame->data[0]);
+    cv::Mat imageB = cv::Mat(height, width, CV_8UC1, frame->data[1]);
+    cv::Mat imageR = cv::Mat(height, width, CV_8UC1, frame->data[2]);
+    cv::Mat matRGB;
+
+    cv::merge(std::vector<cv::Mat>{imageB, imageG, imageR}, matRGB);
+    /* cv::Mat image = cv::Mat(height, width, CV_8UC3, matRGB.data); */
+
+    cv::imshow("press ESC to exit", matRGB);
     if (cv::waitKey(1) == 0x1b)
       break;
   }

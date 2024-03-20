@@ -6,11 +6,12 @@
 # For many purposes, you may not need to change anything about this file.
 
 cmake_minimum_required(VERSION 3.14)
-
+project(CPP_LEARN VERSION 1.2.3.4)
+set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -g")
 # Set project name, version and laguages here. (change as needed)
 # Version numbers are available by including "exampleConfig.h" in
 # the source. See exampleConfig.h.in for some more details.
-project(CPP_LEARN VERSION 1.2.3.4)
+
 
 
 configure_file (
