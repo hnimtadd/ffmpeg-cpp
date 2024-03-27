@@ -36,3 +36,8 @@
 build/
 .cache
 **/.DS_Store
+out
+**/.env
+assets/
+
+docker/**/data

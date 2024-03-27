@@ -1,6 +1,6 @@
 RTSP_URL=/Users/hnimtadd/Project/Learn/cmake/learn-cpp/assets/sample.mp4
-
 PUBLISHING_URL=rtsp://171.244.62.138:9554/live/demo
+REMUX_URL=rtsp://171.244.62.138:9554/live/demo2
 $(which ffmpeg) \
 	-stream_loop -1 \
 	-re \
