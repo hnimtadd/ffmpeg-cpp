@@ -1,17 +1,23 @@
-/* #include <cerrno> */
-/* #include <cstdint> */
+#include "miniocpp/args.h"
+#include "miniocpp/providers.h"
+#include "miniocpp/request.h"
+#include "miniocpp/response.h"
+#include "utils/error.h"
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <miniocpp/client.h>
+#include <miniocpp/credentials.h>
 #include <opencv2/core.hpp>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <string>
+#include <sys/time.h>
 // FFmpeg
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -34,19 +40,10 @@ extern "C" {
 #include <libavutil/timestamp.h>
 #include <libswscale/swscale.h>
 }
-#include <sys/time.h>
 
 #define STREAM_FRAME_RATE 25
 #define STREAM_DURATION 10.0
 #define STREAM_CODEC AV_CODEC_ID_H264
-
-time_t get_time() {
-  struct timeval tv;
-
-  gettimeofday(&tv, NULL);
-
-  return tv.tv_sec;
-}
 
 typedef struct ReadInterval {
   int id;             ///< identifier
@@ -55,11 +52,6 @@ typedef struct ReadInterval {
   int start_is_offset, end_is_offset;
   int duration_frames;
 } ReadInterval;
-int HandleError(int ret, std::string msg) {
-  std::cout << "error: " << msg << "\nret: " << ret
-            << "\nmsg: " << av_err2str(ret) << std::endl;
-  return 2;
-}
 
 static void log_packet(const AVFormatContext *fmt_ctx, const AVPacket *pkt,
                        const char *tag) {
@@ -148,9 +140,6 @@ static int read_interval_packets(AVFormatContext *inFmtCtx, AVStream *in_stream,
       if (ret < 0) {
         HandleError(ret, "cannot av_interleaved_write_frame");
       }
-
-      /* show_packet(w, ifile, pkt, i++); */ // get pkt here
-      /* nb_streams_packets[pkt->stream_index]++; */
     }
     av_packet_unref(pkt);
   }
@@ -166,7 +155,7 @@ end:
   return ret;
 }
 
-int main(int argc, char *argv[]) {
+int mainbak(int argc, char *argv[]) {
   if (argc < 3) {
     std::cout << "Usage:" << argv[0] << "<in_rtsp_url>"
               << "<out_out_url>" << std::endl;
@@ -329,5 +318,40 @@ exit:
   av_write_trailer(outFmtCtx);
   avformat_close_input(&inFmtCtx);
   avformat_close_input(&outFmtCtx);
+  return 0;
+}
+
+int main() {
+  // Create S3 base URL.
+  minio::s3::BaseUrl base_url("localhost", false);
+  base_url.port = 9000;
+
+  // Create credential provider.
+  minio::creds::StaticProvider provider("admin", "secret_password");
+
+  // Create S3 client.
+  minio::s3::Client client(base_url, &provider);
+
+  // Call list buckets.
+
+  minio::s3::UploadObjectArgs args;
+  args.bucket = "my-bucket";
+  args.object = "my-object";
+  args.filename = "./assets/text.txt";
+
+  // Call upload object.
+  minio::s3::UploadObjectResponse resp = client.UploadObject(args);
+
+  // Handle response.
+  if (resp) {
+    std::cout << "my-object.csv is successfully uploaded to my-object"
+              << std::endl;
+  } else {
+    std::cout << "unable to upload object; " << resp.Error().String()
+              << std::endl;
+  }
+
+  // Handle response.
+
   return 0;
 }
