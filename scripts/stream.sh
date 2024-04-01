@@ -5,6 +5,7 @@ $(which ffmpeg) \
 	-stream_loop -1 \
 	-re \
 	-i $RTSP_URL \
+	-threads 4 \
 	-vcodec libx264 \
 	-rtsp_transport tcp \
 	-filter:v fps=10 \

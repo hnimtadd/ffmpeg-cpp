@@ -31,7 +31,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
 # --------------------------------------------------------------------------------
 #                         Locate files (change as needed).
 # --------------------------------------------------------------------------------
-set(SOURCES src/calculator.cpp src/ffmpeg.cpp src/utils/error.cpp)
+set(SOURCES src/calculator.cpp src/ffmpeg.cpp src/utils/error.cpp src/utils/queue.cpp)
 set(LIBRARY_NAME engine)  # Default name for the library built from src/*.cpp (change if you wish)
 
 # --------------------------------------------------------------------------------

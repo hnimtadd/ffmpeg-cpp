@@ -1,23 +1,35 @@
-#include "miniocpp/args.h"
 #include "miniocpp/providers.h"
 #include "miniocpp/request.h"
 #include "miniocpp/response.h"
 #include "utils/error.h"
+#include "utils/queue.h"
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <functional>
 #include <iostream>
+#include <istream>
+#include <memory>
+#include <miniocpp/args.h>
 #include <miniocpp/client.h>
 #include <miniocpp/credentials.h>
+#include <mutex>
 #include <opencv2/core.hpp>
+#include <opencv2/core/hal/interface.h>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <streambuf>
 #include <string>
 #include <sys/time.h>
+#include <sys/types.h>
+#include <thread>
+#include <vector>
 // FFmpeg
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -44,6 +56,22 @@ extern "C" {
 #define STREAM_FRAME_RATE 25
 #define STREAM_DURATION 10.0
 #define STREAM_CODEC AV_CODEC_ID_H264
+bool end = false;
+std::mutex locker;
+std::condition_variable cVar;
+
+std::vector<std::thread> thread_pool;
+struct membuf : std::streambuf {
+  membuf(char const *base, size_t size) {
+    char *p(const_cast<char *>(base));
+    this->setg(p, p, p + size);
+  }
+};
+
+struct imemstream : virtual membuf, std::istream {
+  imemstream(char const *base, size_t size)
+      : membuf(base, size), std::istream(static_cast<std::streambuf *>(this)) {}
+};
 
 typedef struct ReadInterval {
   int id;             ///< identifier
@@ -65,16 +93,19 @@ static void log_packet(const AVFormatContext *fmt_ctx, const AVPacket *pkt,
          pkt->stream_index);
 }
 
-static int read_interval_packets(AVFormatContext *inFmtCtx, AVStream *in_stream,
-                                 AVFormatContext *outFmtCtx,
-                                 AVStream *out_stream, ReadInterval *interval,
-                                 int64_t *cur_ts) {
+static int read_interval_packets(AVCodecContext *codecCtx,
+                                 AVFormatContext *inFmtCtx, AVStream *in_stream,
+                                 ReadInterval *interval, int64_t *cur_ts,
+                                 std::function<void(cv::Mat)> callback) {
   AVFormatContext *fmt_ctx = inFmtCtx;
   AVPacket *pkt = NULL;
   AVFrame *frame = NULL;
   int ret = 0, i = 0, frame_count = 0;
   int64_t start = -INT64_MAX, end = interval->end;
   int has_start = 0, has_end = interval->has_end && !interval->end_is_offset;
+  int width, height;
+  width = in_stream->codecpar->width;
+  height = in_stream->codecpar->height;
 
   av_log(NULL, AV_LOG_VERBOSE, "Processing read interval ");
 
@@ -133,13 +164,91 @@ static int read_interval_packets(AVFormatContext *inFmtCtx, AVStream *in_stream,
 
       frame_count++;
 
-      log_packet(inFmtCtx, pkt, "in");
+      /* log_packet(inFmtCtx, pkt, "in"); */
 
-      pkt->stream_index = out_stream->index;
-      int ret = av_interleaved_write_frame(outFmtCtx, pkt);
+      ret = avcodec_send_packet(codecCtx, pkt);
       if (ret < 0) {
-        HandleError(ret, "cannot av_interleaved_write_frame");
+        if (ret == AVERROR(EAGAIN)) {
+        } else if (ret == AVERROR_EOF) {
+          std::cout
+              << " the decoder has been flushed, and no new packets can be "
+                 "sent "
+                 "to it( also returned if more than 1 flush packet is sent) "
+              << std::endl;
+        } else if (ret == AVERROR(EINVAL)) {
+          std::cout << "codec not opened, it is an "
+                       "encoder, requires flush "
+                    << std::endl;
+        } else if (ret == AVERROR(ENOMEM)) {
+          std::cout << "failed to add packet to internal queue, or similar"
+                    << std::endl;
+        } else {
+          std::cout
+              << " another negative error code legitimate decoding errors "
+              << std::endl;
+        }
+        break;
       }
+
+      AVFrame *frame = av_frame_alloc();
+      ret = avcodec_receive_frame(codecCtx, frame);
+      if (ret < 0) {
+        if (ret == AVERROR(EAGAIN)) {
+          /* std::cout << "output is not available in this state - user must try
+           * " */
+          /*              "to send new input  " */
+          /*           << std::endl; */
+          av_frame_unref(frame);
+          av_freep(frame);
+          continue;
+        } else if (ret == AVERROR_EOF) {
+          std::cout
+              << " the codec has been fully flushed, and there will be no "
+                 "more output frames"
+              << std::endl;
+        } else if (ret == AVERROR(EINVAL)) {
+          std::cout << "codec not opened, or it is an encoder without the @ref "
+                       "AV_CODEC_FLAG_RECON_FRAME flag enabled"
+                    << std::endl;
+        } else {
+          std::cout << "other negative error code legitimate decoding errors"
+                    << std::endl;
+        }
+        break;
+      }
+      /* if (frame_count % 50 != 0) { */
+      /*   continue; */
+      /* } */
+
+      std::cout << "decode" << std::endl;
+      uint8_t *rValue = frame->data[0];
+      uint8_t *gValue = frame->data[1];
+      uint8_t *bValue = frame->data[2];
+
+      uint8_t *arr = (uint8_t *)malloc(height * width * 3 * sizeof(uint8_t));
+
+      memcpy(arr, gValue, width * height);
+      memcpy(arr + width * height, bValue, width * height);
+      memcpy(arr + 2 * width * height, rValue, width * height);
+
+      cv::Mat imageG = cv::Mat(height, width, CV_8UC1, frame->data[0]);
+      cv::Mat imageB = cv::Mat(height, width, CV_8UC1, frame->data[1]);
+      cv::Mat imageR = cv::Mat(height, width, CV_8UC1, frame->data[2]);
+      cv::Mat matRGB;
+
+      cv::merge(std::vector<cv::Mat>{imageB, imageG, imageR}, matRGB);
+      /* cv::Mat image = cv::Mat(height, width, CV_8UC3, matRGB.data); */
+      /* ret = av_write(AVFormatContext *s, AVPacket *pkt) */
+      /* avcodec_send_packet(AVCodecContext * avctx, const AVPacket *avpkt) */
+
+      /* pkt->stream_index = out_stream->index; */
+      /* int ret = av_interleaved_write_frame(outFmtCtx, pkt); */
+      /* if (ret < 0) { */
+      /*   HandleError(ret, "cannot av_interleaved_write_frame"); */
+      /* } */
+      std::unique_ptr<cv::Mat> ptr = std::make_unique<cv::Mat>(matRGB);
+
+      thread_pool.emplace_back(std::thread(callback, *ptr));
     }
     av_packet_unref(pkt);
   }
@@ -155,29 +264,31 @@ end:
   return ret;
 }
 
-int mainbak(int argc, char *argv[]) {
-  if (argc < 3) {
-    std::cout << "Usage:" << argv[0] << "<in_rtsp_url>"
-              << "<out_out_url>" << std::endl;
-    return 1;
+int readloop(int argc, char *argv[], std::function<void(cv::Mat)> callback) {
+  char *infile;
+  AVFormatContext *inFmtCtx;
+  const AVInputFormat *inFmt;
+  const AVCodec *inCodec;
+  AVStream *in_stream;
+  AVCodecContext *inCodecCtx;
+  int ret;
+  int64 cur_ts;
+  ReadInterval interval = (ReadInterval){.has_start = 0, .has_end = 0};
+  const AVCodec *pCodec;
+  AVCodecContext *pCodecCtx;
+  int width, height;
+  AVDictionary *option = nullptr;
+
+  if (argc < 2) {
+    std::cout << "Usage:" << argv[0] << "<in_rtsp_url>" << std::endl;
+    goto exitLoop;
   }
 
-  const char *infile, *outfile;
-  AVFormatContext *outFmtCtx, *inFmtCtx;
-  const AVOutputFormat *outFmt;
-  const AVInputFormat *inFmt;
-  const AVCodec *inCodec, *outCodec;
-  AVStream *in_stream, *out_stream;
-  AVCodecContext *inCodecCtx, *outCodecCtx;
-  int ret;
-
   infile = argv[1];
-  outfile = argv[2];
   avformat_network_init();
 
   inFmtCtx = avformat_alloc_context();
 
-  AVDictionary *option = nullptr;
   av_dict_set(&option, "rtsp_transport", "tcp", 0);
   av_dict_set(&option, "re", "", 0);
 
@@ -185,16 +296,16 @@ int mainbak(int argc, char *argv[]) {
   // open input file context
   ret = avformat_open_input(&inFmtCtx, infile, inFmt, &option);
   if (ret < 0) {
-    return HandleError(ret, "fail to avforamt_open_input");
-    return 2;
+    HandleError(ret, "fail to avforamt_open_input");
+    goto exitLoop;
   }
 
   inFmtCtx->flags |= AVFMT_FLAG_GENPTS;
   // retrive input stream information
   ret = avformat_find_stream_info(inFmtCtx, NULL);
   if (ret < 0) {
-    std::cerr << "fail to avformat_find_stream_info: ret=" << ret;
-    return 2;
+    HandleError(ret, "fail to avformat_find_stream_info");
+    goto exitLoop;
   }
   av_dump_format(inFmtCtx, 0, infile, 0);
 
@@ -202,7 +313,7 @@ int mainbak(int argc, char *argv[]) {
   ret = av_find_best_stream(inFmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, &inCodec, 1);
   if (ret < -2) {
     std::cerr << "fail to av_find_best_stream: ret=" << ret;
-    return 2;
+    goto exitLoop;
   }
   std::cout << "first video stream at index " << ret << " found\n";
 
@@ -212,76 +323,18 @@ int mainbak(int argc, char *argv[]) {
   inCodecCtx = avcodec_alloc_context3(inCodec);
   ret = avcodec_parameters_to_context(inCodecCtx, in_stream->codecpar);
   if (ret < 0) {
-    return HandleError(ret, "cannot avcodec_open2 inCodecCtx");
+    HandleError(ret, "cannot avcodec_open2 inCodecCtx");
+    goto exitLoop;
   }
 
   ret = avcodec_open2(inCodecCtx, inCodec, NULL);
   if (ret < 0) {
-    return HandleError(ret, "cannot avcodec_open2 inCodecCtx");
-  }
-  outCodec = avcodec_find_encoder(STREAM_CODEC);
-
-  outFmt = av_guess_format("hls", outfile, NULL);
-  ret = avformat_alloc_output_context2(&outFmtCtx, outFmt, "hls", outfile);
-  if (ret < 0) {
-    return HandleError(ret, "failed to avformat_alloc_output_context2");
-  }
-  if (!outFmtCtx) {
-    std::cout << "could not create output context\n";
-    return 2;
+    HandleError(ret, "cannot avcodec_open2 inCodecCtx");
+    goto exitLoop;
   }
 
-  outFmtCtx->video_codec_id = STREAM_CODEC;
-  out_stream = avformat_new_stream(outFmtCtx, outCodec);
-  if (!out_stream) {
-    std::cout << "failed to allocating output stream\n";
-    return 1;
-  } else {
-    out_stream->time_base = (AVRational){1, 90000};
-  }
-
-  ret = avcodec_parameters_copy(out_stream->codecpar, in_stream->codecpar);
-  if (ret < 0) {
-    std::cout << "failed to copy codec parameters\n";
-    return 1;
-  }
-
-  av_dump_format(outFmtCtx, 0, outfile, 1);
-  if (!(outFmtCtx->oformat->flags & AVFMT_NOFILE)) {
-    ret = avio_open(&outFmtCtx->pb, outfile, AVIO_FLAG_WRITE);
-    if (ret < 0) {
-      return HandleError(ret, "failed to avio_open");
-      return 1;
-    }
-  }
-
-  outCodecCtx = avcodec_alloc_context3(outCodec);
-  outCodecCtx->pix_fmt = AV_PIX_FMT_YUV422P;
-  outCodecCtx->time_base = (AVRational){1, 90000};
-  outCodecCtx->height = in_stream->codecpar->height;
-  outCodecCtx->width = in_stream->codecpar->width;
-  outCodecCtx->framerate = in_stream->codecpar->framerate;
-
-  /* outCodecCtx->colorspace=AVColorSpace(); */
-  ret = avcodec_open2(outCodecCtx, outCodec, NULL);
-  if (ret < 0) {
-    return HandleError(ret, "failed to avcodec_open2, outCodecCtx");
-  }
-  ret = avcodec_parameters_to_context(outCodecCtx, out_stream->codecpar);
-  if (ret < 0) {
-    return HandleError(ret,
-                       "failed to avcodec_parameters_to_context, outCodecCtx");
-  }
-
-  AVDictionary *outOption;
-  av_dict_set(&outOption, "hls_flags", "delete_segments", 0);
-  ret = avformat_write_header(outFmtCtx, &outOption);
-  if (ret < 0) {
-    return HandleError(ret, "failed to avformat_write_header");
-  }
-
-  int width = in_stream->codecpar->width;
-  int height = in_stream->codecpar->height;
+  width = in_stream->codecpar->width;
+  height = in_stream->codecpar->height;
   std::cout << "infile: " << infile << "\n"
             << "format: " << inFmtCtx->iformat->name << "\n"
             << "vcodec: " << inCodec->name << "\n"
@@ -299,59 +352,111 @@ int mainbak(int argc, char *argv[]) {
 
   ret = av_read_play(inFmtCtx);
   if (ret < 0) {
-    return HandleError(ret, "cannot start read from input");
+    HandleError(ret, "cannot start read from input");
+    goto exitLoop;
   }
-
-  ReadInterval interval = (ReadInterval){.has_start = 0, .has_end = 0};
-  int64_t cur_ts = in_stream->start_time;
-  ret = read_interval_packets(inFmtCtx, in_stream, outFmtCtx, out_stream,
-                              &interval, &cur_ts);
+  pCodec = avcodec_find_decoder(in_stream->codecpar->codec_id);
+  pCodecCtx = avcodec_alloc_context3(pCodec);
+  ret = avcodec_parameters_to_context(pCodecCtx, in_stream->codecpar);
   if (ret < 0) {
-    return HandleError(ret, "cannot read_interval_packets");
+    std::cout << ret << std::endl;
+    HandleError(ret, "cannot avcodec_parameters_to_context");
+    goto exitLoop;
   }
 
-exit:
+  ret = avcodec_open2(pCodecCtx, pCodec, nullptr);
+  if (ret < 0) {
+    std::cout << ret << std::endl;
+    HandleError(ret, "cannot avcodec_open");
+    goto exitLoop;
+  }
+
+  cur_ts = in_stream->start_time;
+  ret = read_interval_packets(pCodecCtx, inFmtCtx, in_stream, &interval,
+                              &cur_ts, callback);
+  if (ret < 0) {
+    HandleError(ret, "cannot read_interval_packets");
+    goto exitLoop;
+  }
   ret = av_read_pause(inFmtCtx);
-  if (ret < 0) {
-    return HandleError(ret, "cannot start read from input");
-  }
-  av_write_trailer(outFmtCtx);
+
+exitLoop:
   avformat_close_input(&inFmtCtx);
-  avformat_close_input(&outFmtCtx);
+  std::lock_guard lk(locker);
+  end = true;
+  std::cout << "exit loop\n";
+  cVar.notify_one();
   return 0;
 }
 
-int main() {
+int main(int argc, char *argv[]) {
   // Create S3 base URL.
+  std::function<void(cv::Mat)> callback;
+
   minio::s3::BaseUrl base_url("localhost", false);
   base_url.port = 9000;
 
-  // Create credential provider.
   minio::creds::StaticProvider provider("admin", "secret_password");
-
-  // Create S3 client.
   minio::s3::Client client(base_url, &provider);
-
-  // Call list buckets.
-
-  minio::s3::UploadObjectArgs args;
-  args.bucket = "my-bucket";
-  args.object = "my-object";
-  args.filename = "./assets/text.txt";
-
-  // Call upload object.
-  minio::s3::UploadObjectResponse resp = client.UploadObject(args);
-
-  // Handle response.
-  if (resp) {
-    std::cout << "my-object.csv is successfully uploaded to my-object"
-              << std::endl;
-  } else {
-    std::cout << "unable to upload object; " << resp.Error().String()
-              << std::endl;
+  minio::s3::ListBucketsResponse resp = client.ListBuckets();
+  if (200 < resp.status_code || resp.status_code > 299) {
+    std::cerr << "could not init client" << std::endl;
+    exit(1);
   }
+  /* std::queue<std::vector<uchar>> queue; */
+  concurrent_queue<std::vector<uchar>> buffCh;
+  concurrent_counter counter;
 
-  // Handle response.
+  std::function<void()> minioReadLoop = [&client, &buffCh, &counter]() -> void {
+    std::cout << "start minio reader...\n";
+    while (1) {
+      if (end) {
+        return;
+      }
+      std::cout << "minio waiting...\n";
+      std::vector<uchar> buff;
+      buffCh.wait_and_pop(buff);
+      imemstream stream(reinterpret_cast<const char *>(buff.data()),
+                        buff.size());
 
-  return 0;
+      minio::s3::PutObjectArgs args(stream, buff.size(), 0);
+      int index = counter.get();
+
+      args.bucket = "my-bucket";
+      args.object = "my-object-" + std::to_string(index) + ".jpg";
+      args.content_type = "image/jpg";
+
+      minio::s3::PutObjectResponse resp = client.PutObject(args);
+
+      // Handle response.
+      if (resp) {
+        std::cout << "my-object is successfully created" << std::endl;
+      } else {
+        std::cout << "unable to do put object; " << resp.Error().String()
+                  << std::endl;
+      }
+      std::cout << "published\n";
+    }
+  };
+
+  callback = [&client, &buffCh](cv::Mat mat) -> void {
+    std::vector<uchar> buff;
+    std::vector<int> param(2);
+    param[0] = cv::IMWRITE_JPEG_QUALITY;
+    param[1] = 80; // default(95) 0-100
+    bool ok = cv::imencode(".jpg", mat, buff, param);
+
+    buffCh.push(buff);
+  };
+
+  std::thread readRTSPThread(readloop, argc, argv, callback);
+  // wait for first thread done
+  std::thread readMinioThread(minioReadLoop);
+  std::unique_lock lk(locker);
+
+  std::cout << "waiting for end\n";
+  cVar.wait(lk, [] { return end; });
+  std::cout << "end\n";
+  std::terminate();
+  return 1;
 }
