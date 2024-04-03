@@ -8,7 +8,7 @@
 cmake_minimum_required(VERSION 3.14)
 project(CPP_LEARN VERSION 1.2.3.4)
 set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -g")
-# Set project name, version and laguages here. (change as needed)
+# Set project name, version and languages here. (change as needed)
 # Version numbers are available by including "exampleConfig.h" in
 # the source. See exampleConfig.h.in for some more details.
 
@@ -18,7 +18,7 @@ configure_file (
   "${PROJECT_SOURCE_DIR}/include/exampleConfig.h.in"
   "${PROJECT_BINARY_DIR}/exampleConfig.h"
 )
-# add the binary tree to the search path for include files
+# Add the binary tree to the search path for include files
 # so that we will find exampleConfig.h
 include_directories("${PROJECT_BINARY_DIR}")
 
@@ -70,7 +70,7 @@ find_package(unofficial-inih CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(pugixml CONFIG REQUIRED)
 
-list(APPEND requiredlibs
+list(APPEND requiredLibs
   CURL::libcurl
   unofficial::curlpp::curlpp
   unofficial::inih::inireader
@@ -84,10 +84,10 @@ find_library(MINIOCPP_LIBRARIES miniocpp)
 
 include_directories( ${MINIOCPP_INCLUDE_DIRS} )
 
-list(APPEND requiredlibs ${MINIOCPP_LIBRARIES})
+list(APPEND requiredLibs ${MINIOCPP_LIBRARIES})
 
 target_include_directories(${LIBRARY_NAME} PUBLIC ${PROJECT_SOURCE_DIR}/include)
-message(STATUS "Found required libs: ${requiredlibs}")
+message(STATUS "Found required libs: ${requiredLibs}")
 
 
 # Add an executable for the file app/main.cpp.
