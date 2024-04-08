@@ -10,5 +10,7 @@ $(which ffmpeg) \
 	-rtsp_transport tcp \
 	-filter:v fps=10 \
 	-force_key_frames "expr:gte(t,n_forced*5)" \
-	-an -sn -f rtsp \
+	-an \
+	-sn \
+	-f rtsp \
 	$PUBLISHING_URL

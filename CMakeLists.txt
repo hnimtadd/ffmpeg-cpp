@@ -26,7 +26,7 @@ include_directories("${PROJECT_BINARY_DIR}")
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 
 
-# Include stuff. No change needed.
+# Include stuff. No change is needed.
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
 # --------------------------------------------------------------------------------
 #                         Locate files (change as needed).
@@ -57,6 +57,7 @@ pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
     libswscale
     libavutil
 )
+
 list(APPEND requiredlibs PkgConfig::LIBAV)
 
 include_directories( ${LIBAV_INCLUDE_DIRS} )
@@ -79,28 +80,22 @@ list(APPEND requiredLibs
   OpenSSL::SSL OpenSSL::Crypto
 )
 
-find_path(MINIOCPP_INCLUDE_DIRS miniocpp/client.h)
 find_library(MINIOCPP_LIBRARIES miniocpp)
-
+find_path(MINIOCPP_INCLUDE_DIRS miniocpp/client.h)
 include_directories( ${MINIOCPP_INCLUDE_DIRS} )
 
-list(APPEND requiredLibs ${MINIOCPP_LIBRARIES})
+list(APPEND requiredlibs ${MINIOCPP_LIBRARIES})
 
 target_include_directories(${LIBRARY_NAME} PUBLIC ${PROJECT_SOURCE_DIR}/include)
-message(STATUS "Found required libs: ${requiredLibs}")
+message(STATUS "Found required libs: ${requiredlibs}")
 
 
 # Add an executable for the file app/main.cpp.
 # If you add more executables, copy these lines accordingly.
 add_executable(main app/main.cpp)   # Name of exec. and location of file.
 target_link_libraries(main ${requiredlibs})
-# target_link_libraries(main PRIVATE ${LIBRARY_NAME})  # Link the executable to library (if it uses it).
-# target_link_libraries(main PRIVATE ${OpenCV_LIBS})
-# target_link_libraries(main PRIVATE PkgConfig::LIBAV)
-# target_link_libraries(main PRIVATE ${MINIOCPP_LIBRARIES})
-
 #
-# Set the properties you require, e.g. what C++ standard to use. Here applied to library and main (change as needed).
+# Set the properties you require, e.g. what C++ standard to use. Here applied to the library and main (change as needed).
 set_target_properties(
     ${LIBRARY_NAME} main
       PROPERTIES

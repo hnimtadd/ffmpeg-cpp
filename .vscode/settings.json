@@ -1,0 +1,11 @@
+{
+  "cmake.buildArgs": [
+    "-DCMAKE_BUILD_TYPE=Debug",
+    "-DCMAKE_TOOLCHAIN_FILE=${workspaceFolder}/../vcpkg/scripts/buildsystems/vcpkg.cmake"
+  ],
+  "cmake.configureArgs": [
+    "-DCMAKE_BUILD_TYPE=Debug",
+    "-DCMAKE_TOOLCHAIN_FILE=${workspaceFolder}/../vcpkg/scripts/buildsystems/vcpkg.cmake"
+  ],
+  "cmake.buildDirectory": "${workspaceFolder}/build"
+}
