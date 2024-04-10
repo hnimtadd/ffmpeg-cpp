@@ -8,7 +8,7 @@
 cmake_minimum_required(VERSION 3.14)
 project(CPP_LEARN VERSION 1.2.3.4)
 set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -g")
-# Set project name, version and laguages here. (change as needed)
+# Set project name, version and languages here. (change as needed)
 # Version numbers are available by including "exampleConfig.h" in
 # the source. See exampleConfig.h.in for some more details.
 
@@ -18,7 +18,7 @@ configure_file (
   "${PROJECT_SOURCE_DIR}/include/exampleConfig.h.in"
   "${PROJECT_BINARY_DIR}/exampleConfig.h"
 )
-# add the binary tree to the search path for include files
+# Add the binary tree to the search path for include files
 # so that we will find exampleConfig.h
 include_directories("${PROJECT_BINARY_DIR}")
 
@@ -26,12 +26,12 @@ include_directories("${PROJECT_BINARY_DIR}")
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 
 
-# Include stuff. No change needed.
+# Include stuff. No change is needed.
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
 # --------------------------------------------------------------------------------
 #                         Locate files (change as needed).
 # --------------------------------------------------------------------------------
-set(SOURCES src/calculator.cpp src/ffmpeg.cpp src/utils/error.cpp)
+set(SOURCES src/calculator.cpp src/ffmpeg.cpp src/utils/error.cpp src/utils/queue.cpp)
 set(LIBRARY_NAME engine)  # Default name for the library built from src/*.cpp (change if you wish)
 
 # --------------------------------------------------------------------------------
@@ -57,6 +57,7 @@ pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
     libswscale
     libavutil
 )
+
 list(APPEND requiredlibs PkgConfig::LIBAV)
 
 include_directories( ${LIBAV_INCLUDE_DIRS} )
@@ -70,7 +71,7 @@ find_package(unofficial-inih CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(pugixml CONFIG REQUIRED)
 
-list(APPEND requiredlibs
+list(APPEND requiredLibs
   CURL::libcurl
   unofficial::curlpp::curlpp
   unofficial::inih::inireader
@@ -79,9 +80,8 @@ list(APPEND requiredlibs
   OpenSSL::SSL OpenSSL::Crypto
 )
 
-find_path(MINIOCPP_INCLUDE_DIRS miniocpp/client.h)
 find_library(MINIOCPP_LIBRARIES miniocpp)
-
+find_path(MINIOCPP_INCLUDE_DIRS miniocpp/client.h)
 include_directories( ${MINIOCPP_INCLUDE_DIRS} )
 
 list(APPEND requiredlibs ${MINIOCPP_LIBRARIES})
@@ -94,13 +94,8 @@ message(STATUS "Found required libs: ${requiredlibs}")
 # If you add more executables, copy these lines accordingly.
 add_executable(main app/main.cpp)   # Name of exec. and location of file.
 target_link_libraries(main ${requiredlibs})
-# target_link_libraries(main PRIVATE ${LIBRARY_NAME})  # Link the executable to library (if it uses it).
-# target_link_libraries(main PRIVATE ${OpenCV_LIBS})
-# target_link_libraries(main PRIVATE PkgConfig::LIBAV)
-# target_link_libraries(main PRIVATE ${MINIOCPP_LIBRARIES})
-
 #
-# Set the properties you require, e.g. what C++ standard to use. Here applied to library and main (change as needed).
+# Set the properties you require, e.g. what C++ standard to use. Here applied to the library and main (change as needed).
 set_target_properties(
     ${LIBRARY_NAME} main
       PROPERTIES

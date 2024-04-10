@@ -2,10 +2,10 @@ clean:
 	rm -rf build/*
 
 build: clean
-	cmake -B build -S . "-DCMAKE_TOOLCHAIN_FILE=../vcpkg//scripts/buildsystems/vcpkg.cmake"
+	cmake -B build -S . "-DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake"
 
 buildDebug: clean
-	cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_TOOLCHAIN_FILE=../vcpkg//scripts/buildsystems/vcpkg.cmake"
+	cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake"
 
 bin: build 
 	cmake --build build
