@@ -15,8 +15,8 @@ set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -g")
 
 
 configure_file (
-  "${PROJECT_SOURCE_DIR}/include/exampleConfig.h.in"
-  "${PROJECT_BINARY_DIR}/exampleConfig.h"
+	"${PROJECT_SOURCE_DIR}/include/example_config.h.in"
+	"${PROJECT_BINARY_DIR}/example_config.h"
 )
 # Add the binary tree to the search path for include files
 # so that we will find exampleConfig.h
@@ -39,26 +39,26 @@ set(LIBRARY_NAME engine)  # Default name for the library built from src/*.cpp (c
 # --------------------------------------------------------------------------------
 # Compile all sources into a library.
 #
-set(requiredlibs)
+set(required_libs)
 add_library(${LIBRARY_NAME} OBJECT ${SOURCES})
-list(APPEND requiredlibs ${LIBRARY_NAME})
+list(APPEND required_libs ${LIBRARY_NAME})
 
 find_package( OpenCV REQUIRED )
 include_directories( ${OpenCV_INCLUDE_DIRS} )
-list(APPEND requiredlibs ${OpenCV_LIBS})
+list(APPEND required_libs ${OpenCV_LIBS})
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
-    libavdevice
-    libavfilter
-    libavformat
-    libavcodec
-    libswresample
-    libswscale
-    libavutil
+		libavdevice
+		libavfilter
+		libavformat
+		libavcodec
+		libswresample
+		libswscale
+		libavutil
 )
 
-list(APPEND requiredlibs PkgConfig::LIBAV)
+list(APPEND required_libs PkgConfig::LIBAV)
 
 include_directories( ${LIBAV_INCLUDE_DIRS} )
 # Lib needs its header files, and users of the library must also see these (PUBLIC). (No change needed)
@@ -71,36 +71,36 @@ find_package(unofficial-inih CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(pugixml CONFIG REQUIRED)
 
-list(APPEND requiredLibs
-  CURL::libcurl
-  unofficial::curlpp::curlpp
-  unofficial::inih::inireader
-  nlohmann_json::nlohmann_json
-  pugixml
-  OpenSSL::SSL OpenSSL::Crypto
+list(APPEND required_libs
+	CURL::libcurl
+	unofficial::curlpp::curlpp
+	unofficial::inih::inireader
+	nlohmann_json::nlohmann_json
+	pugixml
+	OpenSSL::SSL OpenSSL::Crypto
 )
 
 find_library(MINIOCPP_LIBRARIES miniocpp)
 find_path(MINIOCPP_INCLUDE_DIRS miniocpp/client.h)
 include_directories( ${MINIOCPP_INCLUDE_DIRS} )
 
-list(APPEND requiredlibs ${MINIOCPP_LIBRARIES})
+list(APPEND required_libs ${MINIOCPP_LIBRARIES})
 
 target_include_directories(${LIBRARY_NAME} PUBLIC ${PROJECT_SOURCE_DIR}/include)
-message(STATUS "Found required libs: ${requiredlibs}")
+message(STATUS "Found required libs: ${required_libs}")
 
 
 # Add an executable for the file app/main.cpp.
 # If you add more executables, copy these lines accordingly.
 add_executable(main app/main.cpp)   # Name of exec. and location of file.
-target_link_libraries(main ${requiredlibs})
+target_link_libraries(main ${required_libs})
 #
 # Set the properties you require, e.g. what C++ standard to use. Here applied to the library and main (change as needed).
 set_target_properties(
-    ${LIBRARY_NAME} main
-      PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED YES
-        CXX_EXTENSIONS NO
+		${LIBRARY_NAME} main
+			PROPERTIES
+				CXX_STANDARD 17
+				CXX_STANDARD_REQUIRED YES
+				CXX_EXTENSIONS NO
 )
 

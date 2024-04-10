@@ -420,7 +420,7 @@ int init_input(const char *infile, Input &input)
 	return 0;
 }
 
-int init_output(const char *outFile, Output &output, Input *input)
+int init_output(const char *outFile, Output &output, Input *input, const char *guess_format)
 {
 	AVFormatContext *outFmtCtx = avformat_alloc_context();
 	const AVOutputFormat *outFmt;
@@ -431,8 +431,8 @@ int init_output(const char *outFile, Output &output, Input *input)
 
 	outCodec = avcodec_find_encoder(STREAM_CODEC);
 
-	outFmt = av_guess_format("hls", outFile, NULL);
-	ret = avformat_alloc_output_context2(&outFmtCtx, outFmt, "hls", outFile);
+	outFmt = av_guess_format(guess_format, outFile, NULL);
+	ret = avformat_alloc_output_context2(&outFmtCtx, outFmt, guess_format, outFile);
 	if (ret < 0)
 	{
 		return HandleError(ret, "failed to avformat_alloc_output_context2");
@@ -528,11 +528,10 @@ int main(int argc, char *argv[])
 	std::vector<std::thread> threads;
 	int num_thread = std::atoi(argv[1]);
 
-	// int i = 1;
 	for (int i = 0; i < num_thread; i++)
 	{
 		std::thread scope_thread(
-				[&argv, i]()
+				[&argv, i]() -> void
 				{
 					// ########################### INIT INPUT ######################
 					Input input;
@@ -540,9 +539,10 @@ int main(int argc, char *argv[])
 					ret = init_input(argv[2], input);
 					if (ret < 0)
 					{
-						return ret;
+						return;
 					}
 					// ############################################################
+
 					// ################## INIT OUTPUT #############################
 					Output output;
 					int length = snprintf(nullptr, 0, "./out/%d%s", i, argv[3]);
@@ -550,16 +550,17 @@ int main(int argc, char *argv[])
 					snprintf(outputName, length + 1, "./out/%d%s", i, argv[3]);
 
 					std::cout << "init output" << outputName << std::endl;
-					ret = init_output(outputName, output, &input);
+					ret = init_output(outputName, output, &input, "hls");
 					if (ret < 0)
 					{
-						return ret;
+						return;
 					}
 					// ############################################################
 
 					// ################ INIT Buffer Channel #######################
 					concurrent_queue<AVPacket> buffCh;
 					// ############################################################
+
 					auto callback = [&buffCh](AVPacket pkt) mutable -> void
 					{ buffCh.push(pkt); };
 
@@ -572,12 +573,15 @@ int main(int argc, char *argv[])
 
 		threads.emplace_back(std::move(scope_thread));
 	}
+
+	// ################### WAIT-ALL-THREADS ###################
 	std::cout << "waiting for end\n";
 	for (auto &th : thread_pool)
 		th.join();
 
 	for (auto &th : threads)
 		th.join();
+	// ######################################
 
 	std::terminate();
 	return 1;
