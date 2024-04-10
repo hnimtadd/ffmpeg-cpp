@@ -517,7 +517,7 @@ extern "C"
 		Output *output;
 		concurrent_queue<AVPacket> *buffCh;
 	} thread_args;
-	std::vector<thread_args> args;
+	// std::vector<thread_args> args;
 
 	int main(int argc, char *argv[])
 	{
@@ -526,76 +526,60 @@ extern "C"
 			std::cout << "Usage:" << argv[0] << "<num_stream>" << "<in_rtsp_url>" << std::endl;
 			return 0;
 		}
-		int ret;
+
 		std::vector<std::thread> threads;
 		int num_thread = std::atoi(argv[1]);
 
-		int i = 1;
-		// for (int i = 0; i < num_thread; i++)
-		// {
-		// ########################### INIT INPUT ######################
-		Input input;
-		ret = init_input(argv[2], input);
-		if (ret < 0)
+		// int i = 1;
+		for (int i = 0; i < num_thread; i++)
 		{
-			return ret;
+			std::thread scope_thread(
+					[&argv, i]()
+					{
+						// ########################### INIT INPUT ######################
+						Input input;
+						int ret;
+						ret = init_input(argv[2], input);
+						if (ret < 0)
+						{
+							return ret;
+						}
+						// ############################################################
+						// ################## INIT OUTPUT #############################
+						Output output;
+						int length = snprintf(nullptr, 0, "./out/%d%s", i, argv[3]);
+						char *outputName = new char[length + 1];
+						snprintf(outputName, length + 1, "./out/%d%s", i, argv[3]);
+
+						std::cout << "init output" << outputName << std::endl;
+						ret = init_output(outputName, output, &input);
+						if (ret < 0)
+						{
+							return ret;
+						}
+						// ############################################################
+
+						// ################ INIT Buffer Channel #######################
+						concurrent_queue<AVPacket> buffCh;
+						// ############################################################
+						auto callback = [&buffCh](AVPacket pkt) mutable -> void
+						{ buffCh.push(pkt); };
+
+						std::thread readThread(readloop, &input, callback);
+						std::thread writeThread(writeLoop, &output, &buffCh);
+
+						writeThread.join();
+						readThread.join();
+					});
+
+			threads.emplace_back(std::move(scope_thread));
 		}
-		// ############################################################
-
-		// ################## INIT OUTPUT #############################
-
-		Output output;
-		int length = snprintf(nullptr, 0, "./out/%d/%s", i, argv[3]);
-		char *outputName = new char[length + 1];
-		snprintf(outputName, length + 1, "./out/%d/%s", i, argv[3]);
-
-		std::cout << "init output" << outputName << std::endl;
-		ret = init_output(outputName, output, &input);
-		if (ret < 0)
-		{
-			return ret;
-		}
-
-		// ############################################################
-		concurrent_queue<AVPacket> buffCh;
-		auto ptr = std::make_unique<concurrent_queue<AVPacket> *>(&buffCh);
-		// args.emplace_back(thread_args{.input = &input, .output = &output, .buffCh = *ptr});
-
-		// Worker<AVPacket> w(&buffCh);
-		// auto another_ptr = std::make_unique<Worker<AVPacket> *>(&w);
-
-		auto callback = [&buffCh](AVPacket pkt) mutable -> void
-		{ buffCh.push(pkt); };
-
-		// // auto another_ptr = std::make_unique<concurrent_queue<AVPacket> *>(&buffCh);
-		threads.emplace_back(std::thread(readloop, &input, callback));
-		threads.emplace_back(std::thread(writeLoop, &output, *ptr));
-		// }
-
-		// for (int i = 0; i < num_thread; i++)
-		// {
-		// 	auto arg = args[i];
-		// 	// Worker<AVPacket> w(&buffCh);
-		// 	// auto another_ptr = std::make_unique<Worker<AVPacket> *>(arg.buffCh);
-
-		// 	auto callback = [&arg](AVPacket pkt) mutable -> void
-		// 	{ arg.buffCh->push(pkt); };
-
-		// 	// // auto another_ptr = std::make_unique<concurrent_queue<AVPacket> *>(&buffCh);
-		// 	threads.emplace_back(std::thread(readloop, arg.input, callback));
-		// 	threads.emplace_back(std::thread(writeLoop, arg.output, arg.buffCh));
-		// }
-
 		std::cout << "waiting for end\n";
 		for (auto &th : thread_pool)
-		{
 			th.join();
-		}
 
 		for (auto &th : threads)
-		{
 			th.join();
-		}
 
 		std::terminate();
 		return 1;

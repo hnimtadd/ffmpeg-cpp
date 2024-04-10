@@ -16,5 +16,8 @@ docker-up:
 docker-down:
 	docker-compose -f ./docker/docker-compose.yml --env-file .env down
 
-PHONY: clean build buildDebug bin docker-up docker-down
+clean-media:
+	rm -rf out/*
+
+PHONY: clean build buildDebug bin docker-up docker-down clean-media
 
