@@ -44,8 +44,8 @@ public:
     the_condition_variable.wait(lock, [this]
                                 { return !the_queue.empty(); });
     popped_value = the_queue.front();
-    lock.unlock();
     the_queue.pop();
+    lock.unlock();
   }
 };
 
@@ -59,4 +59,17 @@ public:
   concurrent_counter();
   int get();
   void reset();
+};
+
+class concurrent_logger
+{
+private:
+  std::mutex locker;
+  std::queue<char *> log_queue;
+  std::condition_variable cv;
+
+public:
+  concurrent_logger();
+  void write(char *);
+  char *read();
 };

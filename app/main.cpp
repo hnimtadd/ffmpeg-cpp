@@ -1,25 +1,3 @@
-#include "utils/error.h"
-#include "utils/queue.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <condition_variable>
-#include <cstddef>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <exception>
-#include <functional>
-#include <iostream>
-#include <istream>
-#include <memory>
-#include <mutex>
-#include <streambuf>
-#include <string>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <thread>
-#include <vector>
 // FFmpeg
 extern "C"
 {
@@ -43,12 +21,37 @@ extern "C"
 #include <libavutil/timestamp.h>
 #include <libswscale/swscale.h>
 }
+#include "utils/error.h"
+#include "utils/queue.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <functional>
+#include <iostream>
+#include <istream>
+#include <memory>
+#include <mutex>
+#include <streambuf>
+#include <string>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <thread>
+#include <vector>
 
 #define STREAM_FRAME_RATE 25
 #define STREAM_DURATION 10.0
 #define STREAM_CODEC AV_CODEC_ID_H264
+
 std::condition_variable cVar;
 std::vector<std::thread> thread_pool;
+concurrent_logger logger;
+
 struct membuf : std::streambuf
 {
 	membuf(char const *base, size_t size)
@@ -144,54 +147,78 @@ void print_input_metadata(Input input)
 						<< std::flush;
 }
 
-static int read_interval_packets(AVCodecContext *codecCtx,
-																 AVFormatContext *inFmtCtx, AVStream *in_stream,
-																 ReadInterval *interval, int64_t *cur_ts,
-																 std::function<void(AVPacket)> callback)
-//  Worker<AVPacket> *worker)
+int readloop(Input *input, std::function<void(AVPacket)> callback)
 {
-	AVFormatContext *fmt_ctx = inFmtCtx;
+	int ret;
+	int64_t cur_ts;
+	// ReadInterval interval = (ReadInterval){.has_start = 0, .has_end = 0};
+	const AVCodec *pCodec;
+	AVCodecContext *pCodecCtx;
 	AVPacket *pkt = NULL;
 	AVFrame *frame = NULL;
-	int ret = 0, i = 0, frame_count = 0;
-	int64_t start = -INT64_MAX, end = interval->end;
-	int has_start = 0, has_end = interval->has_end && !interval->end_is_offset;
-	int width, height;
+	// int64_t start = -INT64_MAX, end = interval.end;
+	int frame_count = 0;
+	// int has_start = 0, has_end = interval.has_end && !interval.end_is_offset;
 	std::chrono::system_clock::time_point start_ts;
 
-	width = in_stream->codecpar->width;
-	height = in_stream->codecpar->height;
-
-	av_log(NULL, AV_LOG_VERBOSE, "Processing read interval ");
-
-	if (interval->has_start)
+	ret = av_read_play(input->inFmtCtx);
+	if (ret < 0)
 	{
-		int64_t target;
-		if (interval->start_is_offset)
-		{
-			if (*cur_ts == AV_NOPTS_VALUE)
-			{
-				av_log(NULL, AV_LOG_ERROR,
-							 "Could not seek to relative position since current "
-							 "timestamp is not defined\n");
-				ret = AVERROR(EINVAL);
-				goto end;
-			}
-			target = *cur_ts + interval->start;
-		}
-		else
-		{
-			target = interval->start;
-		}
-		if ((ret = avformat_seek_file(fmt_ctx, -1, -INT64_MAX, target, INT64_MAX,
-																	0)) < 0)
-		{
-			av_log(NULL, AV_LOG_ERROR, "Could not seek to position %" PRId64 ": %s\n",
-						 interval->start, av_err2str(ret));
-			goto end;
-		}
+		HandleError(ret, "cannot start read from input");
+		goto end;
 	}
 
+	pCodec = avcodec_find_decoder(input->in_stream->codecpar->codec_id);
+	pCodecCtx = avcodec_alloc_context3(pCodec);
+	ret = avcodec_parameters_to_context(pCodecCtx, input->in_stream->codecpar);
+	if (ret < 0)
+	{
+		std::cout << ret << std::endl;
+		HandleError(ret, "cannot avcodec_parameters_to_context");
+		goto end;
+	}
+
+	ret = avcodec_open2(pCodecCtx, pCodec, nullptr);
+	if (ret < 0)
+	{
+		HandleError(ret, "cannot avcodec_open");
+		goto end;
+	}
+
+	// ################## CHECK IF WE MUST SEEK BEFORE READ THE STREAM ##################
+	cur_ts = input->in_stream->start_time;
+	av_log(NULL, AV_LOG_VERBOSE, "Processing read interval ");
+
+	// if (interval.has_start)
+	// {
+	// 	int64_t target;
+	// 	if (interval.start_is_offset)
+	// 	{
+	// 		if (cur_ts == AV_NOPTS_VALUE)
+	// 		{
+	// 			av_log(NULL, AV_LOG_ERROR,
+	// 						 "Could not seek to relative position since current "
+	// 						 "timestamp is not defined\n");
+	// 			ret = AVERROR(EINVAL);
+	// 			goto end;
+	// 		}
+	// 		target = cur_ts + interval.start;
+	// 	}
+	// 	else
+	// 	{
+	// 		target = interval.start;
+	// 	}
+	// 	if ((ret = avformat_seek_file(input->inFmtCtx, -1, -INT64_MAX, target, INT64_MAX,
+	// 																0)) < 0)
+	// 	{
+	// 		av_log(NULL, AV_LOG_ERROR, "Could not seek to position %" PRId64 ": %s\n",
+	// 					 interval.start, av_err2str(ret));
+	// 		goto end;
+	// 	}
+	// }
+	// ##################################################################################
+
+	// ############################ READ THE STREAM #######################################
 	pkt = av_packet_alloc();
 	if (!pkt)
 	{
@@ -200,51 +227,50 @@ static int read_interval_packets(AVCodecContext *codecCtx,
 	}
 
 	start_ts = std::chrono::system_clock::now();
-	while (!av_read_frame(fmt_ctx, pkt))
+	while (!av_read_frame(input->inFmtCtx, pkt))
 	{
-		if (pkt->stream_index == in_stream->index)
+		if (pkt->stream_index == input->in_stream->index)
 		{
-			AVRational tb = in_stream->time_base;
-			int64_t pts = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
-			if (pts != AV_NOPTS_VALUE)
-				*cur_ts = av_rescale_q(pts, tb, AV_TIME_BASE_Q);
+			// AVRational tb = input->in_stream->time_base;
+			// int64_t pts = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
+			// if (pts != AV_NOPTS_VALUE)
+			// 	cur_ts = av_rescale_q(pts, tb, AV_TIME_BASE_Q);
 
-			if (!has_start && *cur_ts != AV_NOPTS_VALUE)
-			{
-				start = *cur_ts;
-				has_start = 1;
-			}
+			// if (!has_start && cur_ts != AV_NOPTS_VALUE)
+			// {
+			// 	start = cur_ts;
+			// 	has_start = 1;
+			// }
 
-			if (has_start && !has_end && interval->end_is_offset)
-			{
-				end = start + interval->end;
-				has_end = 1;
-			}
+			// if (has_start && !has_end && interval.end_is_offset)
+			// {
+			// 	end = start + interval.end;
+			// 	has_end = 1;
+			// }
 
-			if (interval->end_is_offset && interval->duration_frames)
-			{
-				if (frame_count >= interval->end)
-					break;
-			}
-			else if (has_end && *cur_ts != AV_NOPTS_VALUE && *cur_ts >= end)
-			{
-				break;
-			}
+			// if (interval.end_is_offset && interval.duration_frames)
+			// {
+			// 	if (frame_count >= interval.end)
+			// 		break;
+			// }
+			// else if (has_end && cur_ts != AV_NOPTS_VALUE && cur_ts >= end)
+			// {
+			// 	break;
+			// }
 
 			frame_count++;
-			std::cout << "decode" << std::endl;
 			std::unique_ptr<AVPacket> ptr = std::make_unique<AVPacket>(*pkt);
-			// auto callback = [&worker](AVPacket pkt) -> void
-			// {
-			// 	worker->Do(pkt);
-			// };
 			thread_pool.emplace_back(std::thread(callback, *ptr));
-			std::cout << "readed, " << microSince(start_ts) << "µs\n";
-			start_ts = std::chrono::system_clock::now();
+
+			// ############## send the log to concurrent logger ##############
+			int length = snprintf(nullptr, 0, "[IN] %s---%ffps", input->inFile, frame_count * 1e6 / (microSince(start_ts)));
+			char *fps = new char[length + 1];
+			snprintf(fps, length + 1, "[IN] %s---%ffps", input->inFile, frame_count * 1e6 / (microSince(start_ts)));
+			logger.write(std::move(fps));
+			// ###############################################################
 		}
 	}
 	av_packet_unref(pkt);
-	// Flush remaining frames that are cached in the decoder
 
 end:
 	av_frame_free(&frame);
@@ -254,55 +280,12 @@ end:
 		av_log(NULL, AV_LOG_ERROR, "Could not read packets in interval ");
 	}
 	return ret;
-}
-
-int readloop(Input *input, std::function<void(AVPacket)> callback)
-// int readloop(Input *input, Worker<AVPacket> *worker)
-{
-	int ret;
-	int64_t cur_ts;
-	ReadInterval interval = (ReadInterval){.has_start = 0, .has_end = 0};
-	const AVCodec *pCodec;
-	AVCodecContext *pCodecCtx;
-	int width, height;
-	width = input->in_stream->codecpar->width;
-	height = input->in_stream->codecpar->height;
-
-	ret = av_read_play(input->inFmtCtx);
-	if (ret < 0)
-	{
-		HandleError(ret, "cannot start read from input");
-		goto exitLoop;
-	}
-	pCodec = avcodec_find_decoder(input->in_stream->codecpar->codec_id);
-	pCodecCtx = avcodec_alloc_context3(pCodec);
-	ret = avcodec_parameters_to_context(pCodecCtx, input->in_stream->codecpar);
-	if (ret < 0)
-	{
-		std::cout << ret << std::endl;
-		HandleError(ret, "cannot avcodec_parameters_to_context");
-		goto exitLoop;
-	}
-
-	ret = avcodec_open2(pCodecCtx, pCodec, nullptr);
-	if (ret < 0)
-	{
-		std::cout << ret << std::endl;
-		HandleError(ret, "cannot avcodec_open");
-		goto exitLoop;
-	}
-
-	cur_ts = input->in_stream->start_time;
-	ret = read_interval_packets(pCodecCtx, input->inFmtCtx, input->in_stream,
-															&interval, &cur_ts, callback);
 	if (ret < 0)
 	{
 		HandleError(ret, "cannot read_interval_packets");
-		goto exitLoop;
+		goto end;
 	}
 	ret = av_read_pause(input->inFmtCtx);
-
-exitLoop:
 	avformat_close_input(&input->inFmtCtx);
 	std::cout << "exit loop\n";
 	cVar.notify_one();
@@ -330,22 +313,28 @@ void writeLoop(Output *output,
 							 concurrent_queue<AVPacket> *buffCh)
 {
 	int ret;
-	std::cout << "start hls writer...\n";
+	auto start = std::chrono::system_clock::now();
+	int frameCount;
 	while (1)
 	{
-		std::cout << "waiting...\n";
+		// std::cout << "waiting...\n";
 		AVPacket pkt;
 		buffCh->wait_and_pop(pkt);
-		auto start_ts = std::chrono::system_clock::now();
+		// auto start_ts = std::chrono::system_clock::now();
 		pkt.stream_index = output->out_stream->index;
 
 		ret = av_interleaved_write_frame(output->outFmtCtx, &pkt);
 		if (ret < 0)
 		{
+			continue;
 			HandleError(ret, "cannot av_write_frame");
 		}
-		std::cout << "writed " << microSince(start_ts) << "µs\n";
-		start_ts = std::chrono::system_clock::now();
+		frameCount += 1;
+		int length = snprintf(nullptr, 0, "[OUT] %s---%ffps", output->outFile, frameCount * 1e6 / (microSince(start)));
+		char *fps = new char[length + 1];
+		snprintf(fps, length + 1, "[OUT] %s---%ffps", output->outFile, frameCount * 1e6 / (microSince(start)));
+		logger.write(std::move(fps));
+		// start_ts = std::chrono::system_clock::now();
 	}
 	clean_output(output);
 };
@@ -374,7 +363,6 @@ int init_input(const char *infile, Input &input)
 	{
 		return HandleError(ret, "fail to avforamt_open_input");
 	}
-
 	inFmtCtx->flags |= AVFMT_FLAG_GENPTS;
 	// retrive input stream information
 	ret = avformat_find_stream_info(inFmtCtx, NULL);
@@ -382,9 +370,8 @@ int init_input(const char *infile, Input &input)
 	{
 		return HandleError(ret, "fail to avformat_find_stream_info");
 	}
-	// av_dump_format(inFmtCtx, 0, infile, 0);
 
-	// find primary video stream
+	// ####################### find primary video stream #######################
 	ret = av_find_best_stream(inFmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, &inCodec, 1);
 	if (ret < -2)
 	{
@@ -392,8 +379,11 @@ int init_input(const char *infile, Input &input)
 		return ret;
 	}
 	std::cout << "first video stream at index " << ret << " found\n";
+	// ##############################################
 
 	// in_stream is video stream of input;
+
+	// ####################### INIT CONTEXT  #######################
 	in_stream = inFmtCtx->streams[ret];
 	inCodec = avcodec_find_decoder(in_stream->codecpar->codec_id);
 	inCodecCtx = avcodec_alloc_context3(inCodec);
@@ -408,6 +398,7 @@ int init_input(const char *infile, Input &input)
 	{
 		return HandleError(ret, "cannot avcodec_open2 inCodecCtx");
 	}
+	// ##############################################
 
 	input = {
 			.inFile = infile,
@@ -420,7 +411,7 @@ int init_input(const char *infile, Input &input)
 	return 0;
 }
 
-int init_output(const char *outFile, Output &output, Input *input)
+int init_output(const char *outFile, Output &output, Input *input, const char *guess_format)
 {
 	AVFormatContext *outFmtCtx = avformat_alloc_context();
 	const AVOutputFormat *outFmt;
@@ -429,10 +420,10 @@ int init_output(const char *outFile, Output &output, Input *input)
 	AVStream *out_stream;
 	int ret;
 
+	// ################# INIT CONTEXT #################
 	outCodec = avcodec_find_encoder(STREAM_CODEC);
-
-	outFmt = av_guess_format("hls", outFile, NULL);
-	ret = avformat_alloc_output_context2(&outFmtCtx, outFmt, "hls", outFile);
+	outFmt = av_guess_format(guess_format, outFile, NULL);
+	ret = avformat_alloc_output_context2(&outFmtCtx, outFmt, guess_format, outFile);
 	if (ret < 0)
 	{
 		return HandleError(ret, "failed to avformat_alloc_output_context2");
@@ -492,12 +483,13 @@ int init_output(const char *outFile, Output &output, Input *input)
 	}
 
 	AVDictionary *outOption = nullptr;
-	av_dict_set(&outOption, "hls_flags", "delete_segments", AV_DICT_APPEND);
+	av_dict_set(&outOption, "hls_flags", "delete_segments", 0);
 	ret = avformat_write_header(outFmtCtx, &outOption);
 	if (ret < 0)
 	{
 		return HandleError(ret, "failed to avformat_write_header");
 	}
+	// ################################################
 
 	output = {
 			.outFile = outFile,
@@ -509,13 +501,6 @@ int init_output(const char *outFile, Output &output, Input *input)
 	};
 	return 0;
 }
-typedef struct thread_args
-{
-	Input *input;
-	Output *output;
-	concurrent_queue<AVPacket> *buffCh;
-} thread_args;
-std::vector<thread_args> args;
 
 int main(int argc, char *argv[])
 {
@@ -524,76 +509,74 @@ int main(int argc, char *argv[])
 		std::cout << "Usage:" << argv[0] << "<num_stream>" << "<in_rtsp_url>" << std::endl;
 		return 0;
 	}
-	int ret;
+
+	// start logger thread
+	std::thread log_thread(
+			[]() -> void
+			{
+				while (true)
+				{
+					auto log = logger.read();
+					std::cout << log << std::endl;
+				}
+			});
 	std::vector<std::thread> threads;
 	int num_thread = std::atoi(argv[1]);
-
-	int i = 1;
-	// for (int i = 0; i < num_thread; i++)
-	// {
-	// ########################### INIT INPUT ######################
-	Input input;
-	ret = init_input(argv[2], input);
-	if (ret < 0)
+	for (int i = 0; i < num_thread; i++)
 	{
-		return ret;
+		std::thread scope_thread(
+				[&argv, i]() -> void
+				{
+					// ########################### INIT INPUT ######################
+					Input input;
+					int ret;
+					ret = init_input(argv[2], input);
+					if (ret < 0)
+					{
+						return;
+					}
+					// ############################################################
+
+					// ################## INIT OUTPUT #############################
+					Output output;
+					int length = snprintf(nullptr, 0, "./out/%d%s", i, argv[3]);
+					char *outputName = new char[length + 1];
+					snprintf(outputName, length + 1, "./out/%d%s", i, argv[3]);
+
+					std::cout << "init output" << outputName << std::endl;
+					ret = init_output(outputName, output, &input, "hls");
+					if (ret < 0)
+					{
+						return;
+					}
+					// ############################################################
+
+					// ################ INIT Buffer Channel #######################
+					concurrent_queue<AVPacket> buffCh;
+					// ############################################################
+
+					auto callback = [&buffCh](AVPacket pkt) mutable -> void
+					{ buffCh.push(pkt); };
+
+					std::thread readThread(readloop, &input, callback);
+					std::thread writeThread(writeLoop, &output, &buffCh);
+
+					writeThread.join();
+					readThread.join();
+				});
+
+		threads.emplace_back(std::move(scope_thread));
 	}
-	// ############################################################
 
-	// ################## INIT OUTPUT #############################
-
-	Output output;
-	int length = snprintf(nullptr, 0, "./out/%d/%s", i, argv[3]);
-	char *outputName = new char[length + 1];
-	snprintf(outputName, length + 1, "./out/%d/%s", i, argv[3]);
-
-	std::cout << "init output" << outputName << std::endl;
-	ret = init_output(outputName, output, &input);
-	if (ret < 0)
-	{
-		return ret;
-	}
-
-	// ############################################################
-	concurrent_queue<AVPacket> buffCh;
-	auto ptr = std::make_unique<concurrent_queue<AVPacket> *>(&buffCh);
-	// args.emplace_back(thread_args{.input = &input, .output = &output, .buffCh = *ptr});
-
-	// Worker<AVPacket> w(&buffCh);
-	// auto another_ptr = std::make_unique<Worker<AVPacket> *>(&w);
-
-	auto callback = [&buffCh](AVPacket pkt) mutable -> void
-	{ buffCh.push(pkt); };
-
-	// // auto another_ptr = std::make_unique<concurrent_queue<AVPacket> *>(&buffCh);
-	threads.emplace_back(std::thread(readloop, &input, callback));
-	threads.emplace_back(std::thread(writeLoop, &output, *ptr));
-	// }
-
-	// for (int i = 0; i < num_thread; i++)
-	// {
-	// 	auto arg = args[i];
-	// 	// Worker<AVPacket> w(&buffCh);
-	// 	// auto another_ptr = std::make_unique<Worker<AVPacket> *>(arg.buffCh);
-
-	// 	auto callback = [&arg](AVPacket pkt) mutable -> void
-	// 	{ arg.buffCh->push(pkt); };
-
-	// 	// // auto another_ptr = std::make_unique<concurrent_queue<AVPacket> *>(&buffCh);
-	// 	threads.emplace_back(std::thread(readloop, arg.input, callback));
-	// 	threads.emplace_back(std::thread(writeLoop, arg.output, arg.buffCh));
-	// }
-
+	// ################### WAIT-ALL-THREADS ###################
 	std::cout << "waiting for end\n";
 	for (auto &th : thread_pool)
-	{
 		th.join();
-	}
 
 	for (auto &th : threads)
-	{
 		th.join();
-	}
+	// ######################################
+	log_thread.join();
 
 	std::terminate();
 	return 1;

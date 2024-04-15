@@ -1,18 +1,20 @@
 version: "3.0"
 services:
   nginx:
-    image: nginx:latest
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
     container_name: "nginx"
     env_file: ../.env
     ports:
-      - 8080:${HLS_PORT}
+      - 8080:8080
+      - 9554:9554
     volumes:
-      - ./nginx/conf/nginx.conf:/etc/nginx/nginx.conf:ro
       - ../out:/mnt/hls:ro
   minio:
     image: quay.io/minio/minio:latest
     container_name: "minio"
-    ports:
+  ports:
       - 9000:9000
       - 9001:9001
     environment:
