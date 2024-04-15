@@ -1,6 +1,7 @@
 #include <mutex>
 #include <queue>
 
+const int DEFAULT_BUFFER = 10;
 template <typename Data>
 class concurrent_queue
 {
@@ -10,31 +11,20 @@ private:
   std::condition_variable the_condition_variable;
 
 public:
-  void push(Data const &data)
+  void wait_and_push(Data const &data)
   {
-    std::lock_guard lock(the_mutex);
+    std::unique_lock lock(the_mutex);
+    the_condition_variable.wait(lock, [this]
+                                { return the_queue.size() < DEFAULT_BUFFER; });
     the_queue.push(data);
-    /* lock.unlock(); */
-    the_condition_variable.notify_one();
+    the_condition_variable.notify_all();
+    lock.unlock();
   }
 
   bool empty() const
   {
     std::scoped_lock lock(the_mutex);
     return the_queue.empty();
-  }
-
-  bool try_pop(Data &popped_value)
-  {
-    std::scoped_lock lock(the_mutex);
-    if (the_queue.empty())
-    {
-      return false;
-    }
-
-    popped_value = the_queue.front();
-    the_queue.pop();
-    return true;
   }
 
   void wait_and_pop(Data &popped_value)
@@ -46,6 +36,7 @@ public:
     popped_value = the_queue.front();
     the_queue.pop();
     lock.unlock();
+    the_condition_variable.notify_all();
   }
 };
 

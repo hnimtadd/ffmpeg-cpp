@@ -13,7 +13,5 @@ $(which ffmpeg) \
 	-sn \
 	-f rtsp \
 	$PUBLISHING_URL &
-(sleep 3 && $(which ffplay) -i "$PUBLISHING_URL") &
+(sleep 3 && $(which ffplay) -i "$PUBLISHING_URL" -autoexit -nodisp -loglevel quiet) &
 wait
-
-# replay the stream
