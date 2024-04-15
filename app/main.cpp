@@ -150,15 +150,11 @@ void print_input_metadata(Input input)
 int readloop(Input *input, std::function<void(AVPacket)> callback)
 {
 	int ret;
-	int64_t cur_ts;
-	// ReadInterval interval = (ReadInterval){.has_start = 0, .has_end = 0};
 	const AVCodec *pCodec;
 	AVCodecContext *pCodecCtx;
 	AVPacket *pkt = NULL;
 	AVFrame *frame = NULL;
-	// int64_t start = -INT64_MAX, end = interval.end;
 	int frame_count = 0;
-	// int has_start = 0, has_end = interval.has_end && !interval.end_is_offset;
 	std::chrono::system_clock::time_point start_ts;
 
 	ret = av_read_play(input->inFmtCtx);
@@ -185,38 +181,7 @@ int readloop(Input *input, std::function<void(AVPacket)> callback)
 		goto end;
 	}
 
-	// ################## CHECK IF WE MUST SEEK BEFORE READ THE STREAM ##################
-	cur_ts = input->in_stream->start_time;
 	av_log(NULL, AV_LOG_VERBOSE, "Processing read interval ");
-
-	// if (interval.has_start)
-	// {
-	// 	int64_t target;
-	// 	if (interval.start_is_offset)
-	// 	{
-	// 		if (cur_ts == AV_NOPTS_VALUE)
-	// 		{
-	// 			av_log(NULL, AV_LOG_ERROR,
-	// 						 "Could not seek to relative position since current "
-	// 						 "timestamp is not defined\n");
-	// 			ret = AVERROR(EINVAL);
-	// 			goto end;
-	// 		}
-	// 		target = cur_ts + interval.start;
-	// 	}
-	// 	else
-	// 	{
-	// 		target = interval.start;
-	// 	}
-	// 	if ((ret = avformat_seek_file(input->inFmtCtx, -1, -INT64_MAX, target, INT64_MAX,
-	// 																0)) < 0)
-	// 	{
-	// 		av_log(NULL, AV_LOG_ERROR, "Could not seek to position %" PRId64 ": %s\n",
-	// 					 interval.start, av_err2str(ret));
-	// 		goto end;
-	// 	}
-	// }
-	// ##################################################################################
 
 	// ############################ READ THE STREAM #######################################
 	pkt = av_packet_alloc();
@@ -231,33 +196,6 @@ int readloop(Input *input, std::function<void(AVPacket)> callback)
 	{
 		if (pkt->stream_index == input->in_stream->index)
 		{
-			// AVRational tb = input->in_stream->time_base;
-			// int64_t pts = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
-			// if (pts != AV_NOPTS_VALUE)
-			// 	cur_ts = av_rescale_q(pts, tb, AV_TIME_BASE_Q);
-
-			// if (!has_start && cur_ts != AV_NOPTS_VALUE)
-			// {
-			// 	start = cur_ts;
-			// 	has_start = 1;
-			// }
-
-			// if (has_start && !has_end && interval.end_is_offset)
-			// {
-			// 	end = start + interval.end;
-			// 	has_end = 1;
-			// }
-
-			// if (interval.end_is_offset && interval.duration_frames)
-			// {
-			// 	if (frame_count >= interval.end)
-			// 		break;
-			// }
-			// else if (has_end && cur_ts != AV_NOPTS_VALUE && cur_ts >= end)
-			// {
-			// 	break;
-			// }
-
 			frame_count++;
 			std::unique_ptr<AVPacket> ptr = std::make_unique<AVPacket>(*pkt);
 			thread_pool.emplace_back(std::thread(callback, *ptr));
@@ -271,6 +209,7 @@ int readloop(Input *input, std::function<void(AVPacket)> callback)
 		}
 	}
 	av_packet_unref(pkt);
+	// ####################################################################################
 
 end:
 	av_frame_free(&frame);
@@ -317,7 +256,6 @@ void writeLoop(Output *output,
 	int frameCount;
 	while (1)
 	{
-		// std::cout << "waiting...\n";
 		AVPacket pkt;
 		buffCh->wait_and_pop(pkt);
 		// auto start_ts = std::chrono::system_clock::now();
@@ -378,7 +316,6 @@ int init_input(const char *infile, Input &input)
 		std::cerr << "fail to av_find_best_stream: ret=" << ret;
 		return ret;
 	}
-	std::cout << "first video stream at index " << ret << " found\n";
 	// ##############################################
 
 	// in_stream is video stream of input;
@@ -543,7 +480,7 @@ int main(int argc, char *argv[])
 					char *outputName = new char[length + 1];
 					snprintf(outputName, length + 1, "./out/%d%s", i, argv[3]);
 
-					std::cout << "init output" << outputName << std::endl;
+					// std::cout << "init output" << outputName << std::endl;
 					ret = init_output(outputName, output, &input, "hls");
 					if (ret < 0)
 					{
