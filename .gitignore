@@ -43,3 +43,4 @@ assets/
 docker/**/data
 **.mp4
 **trace
+CMakeLists.json
