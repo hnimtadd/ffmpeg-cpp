@@ -10,6 +10,9 @@ buildDebug: clean
 bin: build 
 	cmake --build build
 
+stream:
+	@ ./scripts/stream.sh
+
 docker-up:
 	docker-compose  -f ./docker/docker-compose.yml --env-file .env up -d
 
