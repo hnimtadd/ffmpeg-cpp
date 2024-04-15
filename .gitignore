@@ -43,4 +43,3 @@ assets/
 docker/**/data
 **.mp4
 **trace
-assets
