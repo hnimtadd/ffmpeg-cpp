@@ -10,7 +10,10 @@ buildDebug: clean
 bin: build 
 	cmake --build build
 
+run: bin
+	./build/main 1 libx264 ./assets/sample_mp4.mp4 hls index.m3u8
 stream:
+
 	@ ./scripts/stream.sh
 
 docker-up:
@@ -22,5 +25,5 @@ docker-down:
 clean-media:
 	rm -rf out/*
 
-PHONY: clean build buildDebug bin docker-up docker-down clean-media
+PHONY: clean build buildDebug bin run docker-up docker-down clean-media 
 
