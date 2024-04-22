@@ -181,8 +181,8 @@ int read_loop(Input *input, std::function<void(AVFrame)> callback)
 		ret = AVERROR(ENOMEM);
 		goto end;
 	}
-
 	start_ts = std::chrono::system_clock::now();
+
 	while (true)
 	{
 		ret = av_read_frame(input->inFmtCtx, pkt);
@@ -203,11 +203,9 @@ int read_loop(Input *input, std::function<void(AVFrame)> callback)
 			{
 				if (ret == AVERROR(EAGAIN))
 				{
-					//  input is not accepted in the current state - user must read output with avcodec_receive_frame()
-					// (once all output is read, the packet should be resent, and the call will not fail with EAGAIN)
 					continue;
 				}
-				else if (ret == AVERROR(EOF))
+				if (ret == AVERROR(EOF))
 				{
 					break;
 				}
@@ -322,11 +320,7 @@ void write_loop(Output *output, concurrent_queue<AVFrame> *buffCh)
 		std::cout << "pop" << std::endl;
 		buffCh->wait_and_pop(frame);
 		std::cout << "popped" << std::endl;
-		// pkt.stream_index = output->out_stream->index;
-		// if (pkt.buf == nullptr)
-		// {
-		// 	continue;
-		// }
+
 		ret = avcodec_send_frame(output->outCodecCtx, &frame);
 		if (ret < 0)
 		{
