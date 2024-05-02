@@ -14,8 +14,7 @@
     └── main.cpp
 ```
 
-Sources go in [src/](src/), header files in [include/](include/), main programs in [app/](app), and
-tests go in [tests/](tests/) (compiled to `unit_tests` by default).
+Sources go in [src/](src/), header files in [include/](include/), and main programs in [app/](app).
 
 ## Building
 
