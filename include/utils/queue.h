@@ -1,7 +1,7 @@
 #include <mutex>
 #include <queue>
 
-const int DEFAULT_BUFFER = 10;
+const int DEFAULT_BUFFER = 100;
 template <typename Data>
 class concurrent_queue
 {

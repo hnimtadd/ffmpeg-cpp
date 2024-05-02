@@ -6,6 +6,13 @@ extern "C"
 #include <libavcodec/codec_id.h>
 #include <libavcodec/codec_par.h>
 #include <libavcodec/packet.h>
+#include <libavutil/opt.h>
+#include <libavcodec/avcodec.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/common.h>
+#include <libavutil/imgutils.h>
+#include <libavutil/mathematics.h>
+#include <libavutil/samplefmt.h>
 #include <libavformat/avformat.h>
 #include <libavformat/avio.h>
 #include <libavutil/avutil.h>
@@ -21,6 +28,7 @@ extern "C"
 #include <libavutil/timestamp.h>
 #include <libswscale/swscale.h>
 }
+#include <unistd.h>
 #include "utils/error.h"
 #include "utils/queue.h"
 #include <condition_variable>
@@ -43,8 +51,7 @@ extern "C"
 #include <thread>
 #include <vector>
 
-#define STREAM_FRAME_RATE 25
-#define STREAM_DURATION 10.0
+#define STREAM_FRAME_RATE 10
 #define STREAM_CODEC AV_CODEC_ID_H264
 
 std::condition_variable cVar;
@@ -134,16 +141,14 @@ void print_input_metadata(Input input)
 int read_loop(Input *input, std::function<void(AVFrame)> callback)
 {
 	int ret;
-	const AVCodec *pCodec;
-	AVCodecContext *pCodecCtx;
 	AVPacket *pkt = NULL;
-	AVFrame *frame = NULL;
 	int frame_count = 0;
 	int log_count = 0;
 	int num_looped = 0;
-	int64_t first_pts = AV_NOPTS_VALUE;
-	int64_t last_pts = AV_NOPTS_VALUE;
-	std::chrono::system_clock::time_point start_ts;
+	// int64_t first_pts = AV_NOPTS_VALUE;
+	// int64_t last_pts = AV_NOPTS_VALUE;
+
+	auto start_ts = std::chrono::system_clock::now();
 
 	// ########## Start network-related read ##########
 	/* ret = av_read_play(input->inFmtCtx); */
@@ -153,23 +158,6 @@ int read_loop(Input *input, std::function<void(AVFrame)> callback)
 	/* 	goto end; */
 	// ###############################################
 	/* } */
-
-	pCodec = avcodec_find_decoder(input->in_stream->codecpar->codec_id);
-	pCodecCtx = avcodec_alloc_context3(pCodec);
-	ret = avcodec_parameters_to_context(pCodecCtx, input->in_stream->codecpar);
-	if (ret < 0)
-	{
-		std::cout << ret << std::endl;
-		HandleError(ret, "cannot avcodec_parameters_to_context");
-		goto end;
-	}
-
-	ret = avcodec_open2(pCodecCtx, pCodec, nullptr);
-	if (ret < 0)
-	{
-		HandleError(ret, "cannot avcodec_open");
-		goto end;
-	}
 
 	std::cout << "Processing read interval\n";
 
@@ -182,7 +170,8 @@ int read_loop(Input *input, std::function<void(AVFrame)> callback)
 		goto end;
 	}
 
-	start_ts = std::chrono::system_clock::now();
+	// ################### READ AVFRAME #####################
+
 	while (true)
 	{
 		ret = av_read_frame(input->inFmtCtx, pkt);
@@ -193,76 +182,92 @@ int read_loop(Input *input, std::function<void(AVFrame)> callback)
 			num_looped += 1;
 			continue;
 		}
-		if (pkt->stream_index == input->in_stream->index)
-		{
-			pkt->dts = pkt->dts + num_looped * input->in_stream->duration;
-			pkt->pts = pkt->pts + num_looped * input->in_stream->duration;
 
-			ret = avcodec_send_packet(input->inCodecCtx, pkt);
+		if (pkt->stream_index != input->in_stream->index)
+		{
+			continue;
+		}
+		pkt->dts = pkt->dts + num_looped * input->in_stream->duration;
+		pkt->pts = pkt->pts + num_looped * input->in_stream->duration;
+
+		ret = avcodec_send_packet(input->inCodecCtx, pkt);
+		if (ret < 0)
+		{
+			if (ret == AVERROR(EAGAIN))
+			{
+				//  input is not accepted in the current state - user must read output with avcodec_receive_frame()
+				// (once all output is read, the packet should be resent, and the call will not fail with EAGAIN)
+				continue;
+			}
+			else if (ret == AVERROR(EOF))
+			{
+				break;
+			}
+			HandleError(ret, "[IN] failed to avcodec_send_packet");
+			goto end;
+		}
+
+		AVFrame *frame;
+		frame = av_frame_alloc();
+		if (!frame)
+		{
+			std::cout << "[IN] failed to alloc frame\n";
+		}
+
+		frame->format = input->inCodecCtx->pix_fmt;
+		frame->width = input->inCodecCtx->width;
+		frame->height = input->inCodecCtx->height;
+		ret = av_frame_get_buffer(frame, 0);
+		if (ret < 0)
+		{
+			HandleError(ret, "[IN] failed to av_frame_get_buffer");
+			exit(1);
+		}
+
+		while (ret >= 0)
+		{
+			auto start_read = std::chrono::system_clock::now();
+			ret = av_frame_make_writable(frame);
 			if (ret < 0)
 			{
+				HandleError(ret, "[IN] cannot av_frame_get_buffer");
+				break;
+			}
+
+			ret = avcodec_receive_frame(input->inCodecCtx, frame);
+			if (ret < 0)
+			{
+				if (ret == AVERROR_EOF)
+					goto end;
+
 				if (ret == AVERROR(EAGAIN))
 				{
-					//  input is not accepted in the current state - user must read output with avcodec_receive_frame()
-					// (once all output is read, the packet should be resent, and the call will not fail with EAGAIN)
-					continue;
-				}
-				else if (ret == AVERROR(EOF))
-				{
+					av_frame_unref(frame);
+					av_freep(frame);
 					break;
 				}
-				HandleError(ret, "[IN] failed to avcodec_send_packet");
+
+				HandleError(ret, "[IN] failed to avcodec_receive_frame");
 				goto end;
 			}
 
-			while (ret >= 0)
-			{
-				AVFrame *frame = av_frame_alloc();
-				ret = avcodec_receive_frame(input->inCodecCtx, frame);
-				if (ret < 0)
-				{
-					if (ret == AVERROR_EOF || ret == AVERROR(EAGAIN))
-						break;
-					HandleError(ret, "[IN] failed to avcodec_receive_frame");
-					goto end;
-				}
+			callback(*frame);
 
-				callback(*frame);
-
-				// ret = filter_encode_write_frame(stream->dec_frame, stream_index);
-				// if (ret < 0)
-				// 	goto end;
-
-				if (first_pts == AV_NOPTS_VALUE)
-				{
-					first_pts = pkt->pts;
-				}
-				last_pts = pkt->pts;
-				frame_count += 1;
-				// ############## send the log to concurrent logger ##############
-				int length = snprintf(nullptr, 0, "[IN] %s---%ffps", input->inFile,
-															float(frame_count * 1e6 * pkt->duration / (AV_TIME_BASE * microSince(start_ts))));
-				char *fps = new char[length + 1];
-				snprintf(fps, length + 1, "[IN] %s---%ffps", input->inFile,
-								 float(frame_count * 1e6 * pkt->duration / (AV_TIME_BASE * microSince(start_ts))));
-				logger.write(std::move(fps));
-				// ###############################################################
-			}
-
-			// std::unique_ptr<AVPacket>
-			// 		ptr = std::make_unique<AVPacket>(*pkt);
-			// callback(*ptr);
-			// thread_pool.emplace_back(std::thread(callback, *ptr));
-
-			/* if (microSince(start_ts) / 5e6 > log_count) { */
+			frame_count += 1;
+			// ############## send the log to concurrent logger ##############
 			int length = snprintf(nullptr, 0, "[IN] %s---%ffps", input->inFile,
-														float(frame_count * 1e6 * pkt->duration / (AV_TIME_BASE * microSince(start_ts))));
+														float(frame_count * 1e6 / (microSince(start_ts))));
 			char *fps = new char[length + 1];
 			snprintf(fps, length + 1, "[IN] %s---%ffps", input->inFile,
-							 float(frame_count * 1e6 * pkt->duration / (AV_TIME_BASE * microSince(start_ts))));
+							 float(frame_count * 1e6 / (microSince(start_ts))));
 			logger.write(std::move(fps));
-			/*   log_count += 1; */
-			/* } */
+			// ###############################################################
+
+			// since read time is smaller than frame time, we should sleep  an amount of time to achive ops equal to fps
+			// frame_time = 1/ fps;
+			// sleep_time = 1/fps - time_since(start_read);
+			auto ms_time_sleep = (frame->duration ? (frame->duration * 1000 / STREAM_FRAME_RATE) : (1e6 / (STREAM_FRAME_RATE))) - microSince(start_read);
+			usleep(ms_time_sleep);
 		}
 	}
 
@@ -271,7 +276,6 @@ int read_loop(Input *input, std::function<void(AVFrame)> callback)
 end:
 	std::cout << "exit loop\n";
 	av_packet_unref(pkt);
-	av_frame_free(&frame);
 	av_packet_free(&pkt);
 	if (ret < 0)
 	{
@@ -313,38 +317,79 @@ void write_loop(Output *output, concurrent_queue<AVFrame> *buffCh)
 	auto start_ts = std::chrono::system_clock::now();
 	int frame_count;
 	int log_count = 0;
-	frame_count++;
 	int64_t first_pts = AV_NOPTS_VALUE;
 	int64_t last_pts = AV_NOPTS_VALUE;
-	while (1)
+
+	// ############# READ FRAME #############
+	int next_pts = 0;
+	while (true)
 	{
 		AVFrame frame;
-		std::cout << "pop" << std::endl;
 		buffCh->wait_and_pop(frame);
-		std::cout << "popped" << std::endl;
-		// pkt.stream_index = output->out_stream->index;
-		// if (pkt.buf == nullptr)
-		// {
-		// 	continue;
-		// }
-		ret = avcodec_send_frame(output->outCodecCtx, &frame);
+
+		AVFrame *decodec_frame = av_frame_alloc();
+		decodec_frame->width = frame.width;
+		decodec_frame->height = frame.height;
+		decodec_frame->format = frame.format;
+		ret = av_frame_copy_props(decodec_frame, &frame);
+		if (ret < 0)
+		{
+			HandleError(ret, "[OUT] cannot av_frame_copy_props");
+		}
+		ret = av_frame_get_buffer(decodec_frame, 0);
+		if (ret < 0)
+		{
+			HandleError(ret, "[OUT] cannot make frame writeable av_frame_make_writeable");
+		};
+		ret = av_frame_make_writable(decodec_frame);
+		if (ret < 0)
+		{
+			HandleError(ret, "[OUT] cannot make frame writeable av_frame_make_writeable");
+		}
+		ret = av_frame_copy(decodec_frame, &frame);
+		if (ret < 0)
+		{
+			HandleError(ret, "[OUT] cannot make frame writeable av_frame_make_writeable");
+		}
+		decodec_frame->pts = next_pts++;
+
+		if (decodec_frame->duration == 0)
+		{
+			continue;
+			// exit(1);
+		}
+
+		// TODO:  return -22 code with this handler (frame or outCodecCtx)
+		ret = avcodec_send_frame(output->outCodecCtx, decodec_frame);
 		if (ret < 0)
 		{
 			if (ret == AVERROR(EOF))
 			{
+				HandleError(ret, "[OUT] end of file in avcodec_send_frame");
 				break;
 			}
+			if (ret == AVERROR(EAGAIN))
+			{
+				continue;
+			}
 			HandleError(ret, "[OUT] failed to avcodec_send_frame");
-			continue;
+			break;
 		}
 
 		while (ret >= 0)
 		{
+			auto start_write = std::chrono::system_clock::now();
 			AVPacket *pkt = av_packet_alloc();
 			ret = avcodec_receive_packet(output->outCodecCtx, pkt);
 			if (ret < 0)
 			{
-				if (ret == AVERROR(EAGAIN) || ret == AVERROR(EOF))
+				if (ret == AVERROR(EOF))
+				{
+					std::cout << "[OUT] outCodecCtx is flushed\n";
+					goto end;
+				}
+
+				if (ret == AVERROR(EAGAIN))
 				{
 					break;
 				}
@@ -354,30 +399,51 @@ void write_loop(Output *output, concurrent_queue<AVFrame> *buffCh)
 
 			if (first_pts == AV_NOPTS_VALUE)
 			{
+				start_ts = std::chrono::system_clock::now();
 				first_pts = pkt->pts;
 			}
-			last_pts = pkt->pts;
 			frame_count += 1;
 
 			pkt->stream_index = output->out_stream->index;
+			av_packet_rescale_ts(pkt,
+													 output->outCodecCtx->time_base,
+													 output->out_stream->time_base);
 
-			// ############## send the log to concurrent logger ##############
-			int length = snprintf(nullptr, 0, "[OUT] %s---%ffps", output->outFile,
-														float(frame_count * 1e6 * pkt->duration / (AV_TIME_BASE * microSince(start_ts))));
-			char *fps = new char[length + 1];
-			snprintf(fps, length + 1, "[OUT] %s---%ffps", output->outFile,
-							 float(frame_count * 1e6 * pkt->duration / (AV_TIME_BASE * microSince(start_ts))));
-			logger.write(std::move(fps));
-			// ###############################################################
-
+			// FIXME: pkt duration is 0
+			if (pkt->duration == 0)
+			{
+				pkt->duration = 1000;
+			}
 			ret = av_interleaved_write_frame(output->outFmtCtx, pkt);
 			if (ret < 0)
 			{
 				HandleError(ret, "[OUT] cannot av_write_frame");
+				av_packet_unref(pkt);
 				continue;
 			}
+
+			// ############## send the log to concurrent logger ##############
+			int length = snprintf(nullptr, 0, "[OUT] %s---%ffps", output->outFile,
+														float(frame_count * 1e6 / (microSince(start_ts))));
+			char *fps = new char[length + 1];
+			snprintf(fps, length + 1, "[OUT] %s---%ffps", output->outFile,
+							 float(frame_count * 1e6 / (microSince(start_ts))));
+			logger.write(std::move(fps));
+			// ###############################################################
+			av_packet_unref(pkt);
+
+			// since the processing time is smaller than frame time, we could sleep an amount of time
+			// frame_time 1 / fps;
+			// sleep_time = 1/fps - time_since(start_write)
+			// auto ms_time_sleep = 1e6 / STREAM_FRAME_RATE - microSince(start_write);
+			// usleep(ms_time_sleep);
+
+			auto ms_time_sleep = (pkt->duration ? (pkt->duration * 1000 / STREAM_FRAME_RATE) : (1e6 / (STREAM_FRAME_RATE))) - microSince(start_write);
+			usleep(ms_time_sleep);
 		}
 	}
+
+	// ######################################
 end:
 	clean_output(output);
 };
@@ -400,7 +466,7 @@ int init_input(const char *infile, const char *format, Input &input)
 	// ################# Init-Option #################
 	//
 	// av_dict_set(&option, "rtsp_transport", "tcp", 0);
-	av_dict_set(&option, "re", "", 0);
+	av_dict_set(&option, "framerate", "10", 0);
 	av_dict_set(&option, "streamloop", "-1", 0);
 	// ###############################################
 	inFmt = av_find_input_format(format);
@@ -517,33 +583,65 @@ int init_output(const char *outFile, const char *format, Output &output,
 	}
 
 	outCodecCtx = avcodec_alloc_context3(outCodec);
-	outCodecCtx->pix_fmt = input->inCodecCtx->pix_fmt;
-	outCodecCtx->time_base = input->inCodecCtx->time_base;
-	outCodecCtx->height = input->inCodecCtx->height;
-	outCodecCtx->width = input->inCodecCtx->width;
-	outCodecCtx->framerate = input->inCodecCtx->framerate;
-	outCodecCtx->sample_aspect_ratio = input->inCodecCtx->sample_aspect_ratio;
-	outCodecCtx->sample_rate = input->inCodecCtx->sample_rate;
+	ret = avcodec_parameters_to_context(outCodecCtx, input->in_stream->codecpar);
+	if (ret < 0)
+	{
+		return HandleError(ret, "[OUT] cannot avcodec_parameters_to_context");
+	}
+	if (input->inCodecCtx->codec_type == AVMEDIA_TYPE_VIDEO)
+	{
+		outCodecCtx->codec_id = outFmtCtx->video_codec_id;
+		outCodecCtx->sample_rate = input->inCodecCtx->sample_rate;
+		outCodecCtx->height = input->inCodecCtx->height;
+		outCodecCtx->width = input->inCodecCtx->width;
+		outCodecCtx->sample_aspect_ratio = input->inCodecCtx->sample_aspect_ratio;
+		outCodecCtx->pix_fmt = input->inCodecCtx->pix_fmt;
+		outCodecCtx->sample_fmt = (input->inCodec)->sample_fmts ? (input->inCodec)->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+		outCodecCtx->bit_rate = 400000;
+		outCodecCtx->time_base = (AVRational){1, STREAM_FRAME_RATE};
+		outCodecCtx->gop_size = 12; /* emit one intra frame every twelve frames at most */
+
+		if (outFmtCtx->video_codec_id == AV_CODEC_ID_H264)
+		{
+
+			av_opt_set(outCodecCtx->priv_data, "preset", "slow", 0);
+		}
+
+		out_stream->time_base = (AVRational){1, STREAM_FRAME_RATE};
+	}
+
+	if (outFmtCtx->oformat->flags & AVFMT_GLOBALHEADER)
+		outCodecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
 	// ############# init out stream option ############
-	AVDictionary *option = nullptr;
 	// #################################################
 
-	ret = avcodec_open2(outCodecCtx, outCodec, nullptr);
+	ret = avcodec_open2(outCodecCtx, outCodec, NULL);
 	if (ret < 0)
 	{
 		return HandleError(ret, "[OUT] failed to avcodec_open2");
 	}
+
 	ret = avcodec_parameters_from_context(out_stream->codecpar, outCodecCtx);
 	if (ret < 0)
 	{
 		return HandleError(ret,
 											 "[OUT] failed to avcodec_parameters_to_context, outCodecCtx");
 	}
-	out_stream->time_base = input->inCodecCtx->time_base;
+
+	if (!(outFmtCtx->oformat->flags & AVFMT_NOFILE))
+	{
+		ret = avio_open(&outFmtCtx->pb, outFile, AVIO_FLAG_WRITE);
+		if (ret < 0)
+		{
+			HandleError(ret, "[OUT] Could not open output file");
+			return ret;
+		}
+	}
 
 	AVDictionary *outOption = nullptr;
 	av_dict_set(&outOption, "hls_flags", "delete_segments", AV_DICT_APPEND);
+
 	ret = avformat_write_header(outFmtCtx, &outOption);
 	if (ret < 0)
 	{
@@ -564,97 +662,176 @@ int init_output(const char *outFile, const char *format, Output &output,
 
 int main(int argc, char *argv[])
 {
-	if (argc < 6)
+	std::vector<std::thread> threads;
+	std::thread log_thread(
+			[]() -> void
+			{
+				while (true)
+				{
+					auto log = logger.read();
+					std::cout << log << std::endl;
+				}
+			});
+
+	switch (argc)
 	{
+	case 4:
+	{
+		// in this case we only read the pkt without encoded it
+
+		/* av_log_set_level(AV_LOG_QUIET); */
+		int num_thread = std::atoi(argv[1]);
+		const char *in_format = argv[2];
+		const char *in_file = argv[3];
+
+		std ::cout
+				<< "##################### INFORMATION #####################"
+				<< "\nnum_thread: " << num_thread
+				<< "\nin_format: " << in_format
+				<< "\nin_file: " << in_file
+				<< "\n#########################################################"
+				<< std::endl;
+
+		// start logger thread
+		for (int i = 0; i < num_thread; i++)
+		{
+			std::thread scope_thread(
+					[&in_file, &in_format, i]() -> void
+					{
+						// ########################### INIT INPUT ######################
+						Input input;
+						int ret;
+						ret = init_input(in_file, in_format, input);
+						if (ret < 0)
+						{
+							return;
+						}
+						// ############################################################
+
+						auto callback = [](AVFrame frame) mutable -> void
+						{
+							return;
+						};
+
+						std::thread readThread(read_loop, &input, callback);
+						readThread.join();
+					});
+
+			threads.emplace_back(std::move(scope_thread));
+		}
+
+		// ################### WAIT-ALL-THREADS ###################
+		std::cout << "waiting for end\n";
+		for (auto &th : thread_pool)
+			th.join();
+
+		for (auto &th : threads)
+			th.join();
+		// ######################################
+
+		std::terminate();
+		return 1;
+	}
+	case 6:
+	{
+		// in this case we read the pkt and encoded it to another format
+
+		/* av_log_set_level(AV_LOG_QUIET); */
+		int num_thread = std::atoi(argv[1]);
+		const char *in_format = argv[2];
+		const char *in_file = argv[3];
+		const char *out_format = argv[4];
+		const char *out_file = argv[5];
+
+		std ::cout
+				<< "##################### INFORMATION #####################"
+				<< "\nnum_thread: " << num_thread
+				<< "\nin_format: " << in_format
+				<< "\nin_file: " << in_file
+				<< "\nout_format: " << out_format
+				<< "\nout_file: " << out_file
+				<< "\n#########################################################"
+				<< std::endl;
+
+		// start logger thread
+		for (int i = 0; i < num_thread; i++)
+		{
+			std::thread scope_thread(
+					[&out_file, &out_format, &in_file, &in_format, i]() -> void
+					{
+						// ########################### INIT INPUT ######################
+						Input input;
+						int ret;
+						ret = init_input(in_file, in_format, input);
+						if (ret < 0)
+						{
+							return;
+						}
+						// ############################################################
+
+						// ################## INIT OUTPUT #############################
+						Output output;
+						int length = snprintf(nullptr, 0, "./out/%d%s", i, out_file);
+						char *outputName = new char[length + 1];
+						snprintf(outputName, length + 1, "./out/%d%s", i, out_file);
+
+						std::cout << "init output " << outputName << std::endl;
+						ret = init_output(outputName, out_format, output, &input);
+						if (ret < 0)
+						{
+							delete[] outputName;
+							return;
+						}
+						// ############################################################
+
+						// ################ INIT Buffer Channel #######################
+						concurrent_queue<AVFrame> buffCh;
+						// concurrent_queue<AVFrame> buffCh;
+						// ############################################################
+
+						auto callback = [&buffCh](AVFrame data) mutable -> void
+						{
+							buffCh.wait_and_push(data);
+						};
+
+						// auto callback = [&buffCh](AVFrame frame) mutable -> void
+						// {
+						// 	buffCh.wait_and_push(frame);
+						// };
+
+						std::thread readThread(read_loop, &input, callback);
+						std::thread writeThread(write_loop, &output, &buffCh);
+
+						writeThread.join();
+						readThread.join();
+						delete[] outputName;
+					});
+
+			threads.emplace_back(std::move(scope_thread));
+		}
+
+		// ################### WAIT-ALL-THREADS ###################
+		std::cout << "waiting for end\n";
+		for (auto &th : thread_pool)
+			th.join();
+
+		for (auto &th : threads)
+			th.join();
+		// ######################################
+
+		std::terminate();
+		return 1;
+	}
+	default:
 		std::cout << "Usage:" << argv[0] << "<num_stream>"
 							<< "<in_format>"
 							<< "<in_file>"
 							<< "<out_format>"
 							<< "<out_file>" << std::endl;
+		std::cout << argv[0] << "<num_stream>"
+							<< "<in_format>"
+							<< "<in_file>"
+							<< std::endl;
 		return 0;
 	}
-	/* av_log_set_level(AV_LOG_QUIET); */
-	int num_thread = std::atoi(argv[1]);
-	const char *in_format = argv[2];
-	const char *in_file = argv[3];
-	const char *out_format = argv[4];
-	const char *out_file = argv[5];
-
-	std ::cout
-			<< "##################### INFORMATION #####################"
-			<< "\nnum_thread: " << num_thread
-			<< "\nin_format: " << in_format
-			<< "\nin_file: " << in_file
-			<< "\nout_format: " << out_format
-			<< "\nout_file: " << out_file
-			<< "\n#########################################################"
-			<< std::endl;
-
-	// start logger thread
-	std::thread log_thread([]() -> void
-												 {
-    while (true) {
-      auto log = logger.read();
-      std::cout << log << std::endl;
-    } });
-	std::vector<std::thread> threads;
-	for (int i = 0; i < num_thread; i++)
-	{
-		std::thread scope_thread(
-				[&out_file, &out_format, &in_file, &in_format, i]() -> void
-				{
-					// ########################### INIT INPUT ######################
-					Input input;
-					int ret;
-					ret = init_input(in_file, in_format, input);
-					if (ret < 0)
-					{
-						return;
-					}
-					// ############################################################
-
-					// ################## INIT OUTPUT #############################
-					Output output;
-					int length = snprintf(nullptr, 0, "./out/%d%s", i, out_file);
-					char *outputName = new char[length + 1];
-					snprintf(outputName, length + 1, "./out/%d%s", i, out_file);
-
-					std::cout << "init output " << outputName << std::endl;
-					ret = init_output(outputName, out_format, output, &input);
-					if (ret < 0)
-					{
-						return;
-					}
-					// ############################################################
-
-					// ################ INIT Buffer Channel #######################
-					concurrent_queue<AVFrame> buffCh;
-					// ############################################################
-
-					auto callback = [&buffCh](AVFrame frame) mutable -> void
-					{
-						buffCh.wait_and_push(frame);
-					};
-
-					std::thread readThread(read_loop, &input, callback);
-					std::thread writeThread(write_loop, &output, &buffCh);
-
-					writeThread.join();
-					readThread.join();
-				});
-
-		threads.emplace_back(std::move(scope_thread));
-	}
-
-	// ################### WAIT-ALL-THREADS ###################
-	std::cout << "waiting for end\n";
-	for (auto &th : thread_pool)
-		th.join();
-
-	for (auto &th : threads)
-		th.join();
-	// ######################################
-
-	std::terminate();
-	return 1;
 }
